@@ -15,16 +15,10 @@ jobs:
         with:
           repository: armory3d/armorpaint
           submodules: recursive
-          # fetch-depth removido: garante que todos os commits dos submódulos sejam baixados
 
       # ============================================================
-      # 2. Configurar Ferramentas
+      # 2. Configurar Ferramentas (MSBuild + Compilador C++)
       # ============================================================
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
 
@@ -40,21 +34,27 @@ jobs:
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT VIA NODE.JS"
+          Write-Host "GENERATING PROJECT (NEW STRUCTURE)"
           Write-Host "=========================================="
           
-          if (Test-Path "armorcore\make.js") {
-              Write-Host "ArmorCore detectado. Gerando projeto..."
-              node armorcore/make -g direct3d11
-          } elseif (Test-Path "Kinc\make.js") {
-              Write-Host "Kinc detectado. Gerando projeto..."
-              node Kinc/make -g direct3d11
-          } else {
-              Write-Host "ERRO: O make.js não foi encontrado. Conteúdo atual da raiz:"
-              Get-ChildItem -Force
-              Write-Error "O download dos submódulos falhou ou a estrutura do repositório mudou."
+          if (-not (Test-Path "paint")) {
+              Write-Error "A pasta 'paint' não existe no repositório baixado."
               exit 1
           }
+          
+          # Entra na pasta do aplicativo para rodar a engine base
+          cd paint
+          Write-Host "Diretório de trabalho atual: $(Get-Location)"
+          
+          # Usa cmd.exe para resolver o executável/batch do sistema de make da Armory
+          cmd.exe /c "..\base\make"
+          
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "O comando ..\base\make falhou."
+              exit $LASTEXITCODE
+          }
+          
+          cd ..
 
       # ============================================================
       # 4. Compilar
@@ -66,15 +66,16 @@ jobs:
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
           
-          if (-not (Test-Path "build\ArmorPaint.sln")) {
-              Write-Host "ERRO: ArmorPaint.sln não foi gerado. Conteúdo da pasta build:"
-              if (Test-Path "build") { Get-ChildItem "build" -Force }
-              Write-Error "Falha na geração do projeto."
+          # Procura a solution gerada dinamicamente
+          $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          
+          if (-not $sln) {
+              Write-Error "ArmorPaint.sln não foi gerado."
               exit 1
           }
           
-          Write-Host "Compilando build\ArmorPaint.sln..."
-          msbuild build\ArmorPaint.sln /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
+          Write-Host "Compilando: $($sln.FullName)"
+          msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
       # 5. Montar Pacote Final
@@ -88,17 +89,25 @@ jobs:
           
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
           
-          # A) Localizar e copiar a pasta Krom correta (a que contém os shaders e dados)
-          if (-not (Test-Path "build\krom\krom.js")) {
-              Write-Error "Arquivos essenciais (build\krom\krom.js) não encontrados."
-              exit 1
+          # A) Localizar e copiar a pasta krom
+          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
+                  Where-Object { $_.FullName -match "build[\\/]krom" } | 
+                  Select-Object -First 1
+                  
+          if (-not $krom) {
+              # Fallback caso a pasta se chame krom, mas não esteja dentro de build
+              $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           }
           
-          Write-Host "Copiando pasta krom..."
-          Copy-Item "build\krom\*" ".\artifact\" -Recurse -Force
+          if (-not $krom) {
+              Write-Error "Pasta com os dados krom não encontrada."
+              exit 1
+          }
+          Write-Host "Copiando arquivos de suporte de: $($krom.FullName)"
+          Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
           
-          # B) Localizar o executável compilado ignorando pastas indesejadas
-          $exe = Get-ChildItem -Path ".\build" -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
+          # B) Localizar o executável compilado ignorando pastas não relacionadas
+          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
                  Where-Object { $_.Directory.Name -ne "krom" } | 
                  Select-Object -First 1
                  
@@ -106,8 +115,7 @@ jobs:
               Write-Error "ArmorPaint.exe compilado não encontrado."
               exit 1
           }
-          
-          Write-Host "Copiando executável compilado ($($exe.Name))..."
+          Write-Host "Copiando executável principal de: $($exe.FullName)"
           Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
           
           Write-Host "=========================================="
