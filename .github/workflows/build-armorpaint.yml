@@ -3,144 +3,407 @@ name: Build ArmorPaint Windows x64
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build ArmorPaint
     runs-on: windows-latest
+
     steps:
       # ============================================================
-      # 1. Checkout do Repositório Oficial + Submódulos Profundos
+      # 1. Checkout oficial + todos os submódulos
       # ============================================================
-      - name: Checkout Official ArmorPaint
+      - name: Checkout ArmorPaint
         uses: actions/checkout@v4
         with:
           repository: armory3d/armorpaint
+          ref: main
           submodules: recursive
           fetch-depth: 0
 
-      - name: Initialize Nested Submodules
-        shell: bash
-        run: |
-          git submodule update --init --recursive
-
-      # ============================================================
-      # 2. Configurar Ferramentas (Node.js + MSBuild + MSVC)
-      # ============================================================
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      # ============================================================
-      # 3. Gerar Arquivos da Solution (.sln) via make.bat
-      # ============================================================
-      - name: Generate ArmorPaint project
+      - name: Initialize submodules
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT VIA MAKE.BAT"
+          Write-Host "INITIALIZING SUBMODULES"
           Write-Host "=========================================="
-          
-          if (-not (Test-Path "paint")) {
-              Write-Error "A pasta 'paint' não foi encontrada."
-              exit 1
-          }
-          
-          # Entra na pasta do aplicativo conforme documentação oficial
-          cd paint
-          Write-Host "Diretório atual: $(Get-Location)"
-          
-          # Executa o make.bat da base com o gerador direct3d11 via CMD
-          cmd.exe /c "..\base\make.bat -g direct3d11"
-          
+
+          git submodule sync --recursive
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "O make.bat falhou com código $LASTEXITCODE."
-              exit $LASTEXITCODE
+              throw "git submodule sync failed."
           }
-          
-          cd ..
+
+          git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) {
+              throw "git submodule update failed."
+          }
+
+          Write-Host ""
+          Write-Host "Submodules:"
+          git submodule status --recursive
 
       # ============================================================
-      # 4. Compilar a Solution Gerada
+      # 2. Verificar Visual Studio / Clang
+      # ============================================================
+      - name: Verify Visual Studio toolchain
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=========================================="
+          Write-Host "VERIFYING VISUAL STUDIO TOOLCHAIN"
+          Write-Host "=========================================="
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+          if (-not (Test-Path $vswhere)) {
+              throw "vswhere.exe not found."
+          }
+
+          $vsInstall = & $vswhere `
+              -latest `
+              -products "*" `
+              -property installationPath
+
+          if (-not $vsInstall) {
+              throw "No Visual Studio installation found."
+          }
+
+          Write-Host "Visual Studio:"
+          Write-Host $vsInstall
+
+          $vcvars = & $vswhere `
+              -latest `
+              -products "*" `
+              -find "VC\Auxiliary\Build\vcvars64.bat"
+
+          if (-not $vcvars) {
+              throw "vcvars64.bat not found."
+          }
+
+          Write-Host ""
+          Write-Host "vcvars64:"
+          Write-Host $vcvars
+
+          $clang = & $vswhere `
+              -latest `
+              -products "*" `
+              -find "VC\Tools\Llvm\x64\bin\clang-cl.exe"
+
+          if (-not $clang) {
+              throw "clang-cl.exe not found. The ArmorPaint project uses the ClangCL Visual Studio toolset."
+          }
+
+          Write-Host ""
+          Write-Host "clang-cl:"
+          Write-Host $clang
+
+          & $clang --version
+
+      # ============================================================
+      # 3. Verificar estrutura do repositório
+      # ============================================================
+      - name: Verify ArmorPaint source tree
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=========================================="
+          Write-Host "VERIFYING SOURCE TREE"
+          Write-Host "=========================================="
+
+          $required = @(
+              "base\make.bat",
+              "base\tools\bin\windows_x64\amake.exe",
+              "paint"
+          )
+
+          foreach ($item in $required) {
+              if (-not (Test-Path $item)) {
+                  throw "Required path not found: $item"
+              }
+
+              Write-Host "OK: $item"
+          }
+
+      # ============================================================
+      # 4. Gerar + compilar ArmorPaint
+      #
+      # IMPORTANTE:
+      # O build atual usa:
+      #
+      #   --target windows
+      #   --graphics direct3d11
+      #   --compile
+      #
+      # Não usamos:
+      #
+      #   -g direct3d11
+      #   ArmorPaint.sln
+      #
+      # porque o sistema atual gera ArmorPaint.vcxproj / ArmorPaint.slnx.
       # ============================================================
       - name: Build ArmorPaint Release x64
         shell: powershell
+        working-directory: paint
         run: |
+          $ErrorActionPreference = "Stop"
+
           Write-Host "=========================================="
-          Write-Host "BUILDING SOLUTION"
+          Write-Host "BUILDING ARMORPAINT"
           Write-Host "=========================================="
-          
-          # Procura a solution gerada em qualquer diretório do workspace
-          $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          
-          if (-not $sln) {
-              Write-Error "ArmorPaint.sln não foi gerado."
-              Write-Host "Listando diretórios de build para debug:"
-              Get-ChildItem -Filter "*build*" -Directory -Recurse -ErrorAction SilentlyContinue
-              exit 1
+
+          Write-Host "Working directory:"
+          Write-Host (Get-Location)
+
+          Write-Host ""
+          Write-Host "Running:"
+          Write-Host "..\base\make.bat --target windows --graphics direct3d11 --compile"
+          Write-Host ""
+
+          cmd.exe /d /c "..\base\make.bat --target windows --graphics direct3d11 --compile"
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "ArmorPaint build failed with exit code $LASTEXITCODE."
           }
-          
-          Write-Host "Compilando: $($sln.FullName)"
-          msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
-      # 5. Montar Pacote Final (Artefato)
+      # 5. Verificar os arquivos realmente produzidos
       # ============================================================
-      - name: Create complete package
+      - name: Verify build output
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           Write-Host "=========================================="
-          Write-Host "ASSEMBLING ARTIFACT"
+          Write-Host "VERIFYING BUILD OUTPUT"
           Write-Host "=========================================="
-          
-          New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
-          
-          # A) Localizar e copiar a pasta krom (Contém krom.js, shaders e dados)
-          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
-                  Where-Object { Test-Path (Join-Path $_.FullName "krom.js") } | 
-                  Select-Object -First 1
-                  
-          if (-not $krom) {
-              Write-Error "Pasta krom com krom.js não foi encontrada."
-              exit 1
+
+          $repoRoot = $env:GITHUB_WORKSPACE
+
+          $paintOut = Join-Path $repoRoot "paint\build\out"
+          $rootOut  = Join-Path $repoRoot "build\out"
+
+          Write-Host ""
+          Write-Host "paint\build\out:"
+          if (Test-Path $paintOut) {
+              Get-ChildItem $paintOut -Recurse |
+                  Select-Object FullName, Length
           }
-          
-          Write-Host "Copiando arquivos krom de: $($krom.FullName)"
-          Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
-          
-          # B) Localizar o executável compilado (.exe)
-          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Directory.Name -ne "krom" } | 
-                 Select-Object -First 1
-                 
-          if (-not $exe) {
-              Write-Error "ArmorPaint.exe compilado não encontrado."
-              exit 1
+          else {
+              Write-Warning "paint\build\out does not exist."
           }
-          
-          Write-Host "Copiando executável de: $($exe.FullName)"
-          Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
-          
-          Write-Host "=========================================="
-          Write-Host "FINAL PACKAGE CONTENT"
-          Write-Host "=========================================="
-          Get-ChildItem ".\artifact" | Select-Object Name
+
+          Write-Host ""
+          Write-Host "build\out:"
+          if (Test-Path $rootOut) {
+              Get-ChildItem $rootOut -Recurse |
+                  Select-Object FullName, Length
+          }
+          else {
+              Write-Warning "build\out does not exist."
+          }
+
+          # Procurar ArmorPaint.exe nos dois locais possíveis
+          $exeCandidates = @()
+
+          if (Test-Path $paintOut) {
+              $exeCandidates += Get-ChildItem `
+                  -Path $paintOut `
+                  -Filter "ArmorPaint.exe" `
+                  -File `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $rootOut) {
+              $exeCandidates += Get-ChildItem `
+                  -Path $rootOut `
+                  -Filter "ArmorPaint.exe" `
+                  -File `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue
+          }
+
+          $exeCandidates = $exeCandidates | Sort-Object FullName -Unique
+
+          if (-not $exeCandidates) {
+              Write-Host ""
+              Write-Host "Searching entire repository for ArmorPaint.exe..."
+              
+              $exeCandidates = Get-ChildItem `
+                  -Path $repoRoot `
+                  -Filter "ArmorPaint.exe" `
+                  -File `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue
+          }
+
+          if (-not $exeCandidates) {
+              throw "ArmorPaint.exe was not produced."
+          }
+
+          Write-Host ""
+          Write-Host "Found executable(s):"
+
+          foreach ($exe in $exeCandidates) {
+              Write-Host "  $($exe.FullName)"
+              Write-Host "  Size: $($exe.Length) bytes"
+          }
 
       # ============================================================
-      # 6. Upload do Artefato
+      # 6. Montar pacote portátil
+      #
+      # O output de dados é gerado em:
+      #   paint\build\out
+      #
+      # O make atual copia o executável para:
+      #   build\out\ArmorPaint.exe
+      #
+      # Juntamos ambos num único diretório portátil.
       # ============================================================
-      - name: Upload ArmorPaint
+      - name: Assemble portable package
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=========================================="
+          Write-Host "ASSEMBLING PORTABLE PACKAGE"
+          Write-Host "=========================================="
+
+          $repoRoot = $env:GITHUB_WORKSPACE
+          $artifact = Join-Path $repoRoot "artifact"
+
+          if (Test-Path $artifact) {
+              Remove-Item $artifact -Recurse -Force
+          }
+
+          New-Item `
+              -ItemType Directory `
+              -Path $artifact `
+              -Force |
+              Out-Null
+
+          $paintOut = Join-Path $repoRoot "paint\build\out"
+          $rootOut  = Join-Path $repoRoot "build\out"
+
+          # ----------------------------------------------------------
+          # A) Copiar runtime/data gerados pelo ArmorPaint
+          # ----------------------------------------------------------
+          if (Test-Path $paintOut) {
+              Write-Host ""
+              Write-Host "Copying runtime data from:"
+              Write-Host $paintOut
+
+              Copy-Item `
+                  -Path (Join-Path $paintOut "*") `
+                  -Destination $artifact `
+                  -Recurse `
+                  -Force
+          }
+
+          # ----------------------------------------------------------
+          # B) Copiar possíveis arquivos adicionais do output raiz
+          # ----------------------------------------------------------
+          if (Test-Path $rootOut) {
+              Write-Host ""
+              Write-Host "Copying root build output from:"
+              Write-Host $rootOut
+
+              Copy-Item `
+                  -Path (Join-Path $rootOut "*") `
+                  -Destination $artifact `
+                  -Recurse `
+                  -Force
+          }
+
+          # ----------------------------------------------------------
+          # C) Garantir que ArmorPaint.exe está na raiz do pacote
+          # ----------------------------------------------------------
+          $exe = Get-ChildItem `
+              -Path $repoRoot `
+              -Filter "ArmorPaint.exe" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Sort-Object FullName
+
+          if (-not $exe) {
+              throw "ArmorPaint.exe could not be located."
+          }
+
+          # Preferir o executável gerado no build/out
+          $preferredExe = $exe |
+              Where-Object {
+                  $_.FullName -eq (Join-Path $rootOut "ArmorPaint.exe")
+              } |
+              Select-Object -First 1
+
+          if (-not $preferredExe) {
+              $preferredExe = $exe |
+                  Where-Object {
+                      $_.FullName -eq (Join-Path $repoRoot "paint\build\x64\Release\ArmorPaint.exe")
+                  } |
+                  Select-Object -First 1
+          }
+
+          if (-not $preferredExe) {
+              $preferredExe = $exe | Select-Object -Last 1
+          }
+
+          Write-Host ""
+          Write-Host "Using executable:"
+          Write-Host $preferredExe.FullName
+
+          Copy-Item `
+              $preferredExe.FullName `
+              (Join-Path $artifact "ArmorPaint.exe") `
+              -Force
+
+          # ----------------------------------------------------------
+          # D) Verificação final
+          # ----------------------------------------------------------
+          $finalExe = Join-Path $artifact "ArmorPaint.exe"
+
+          if (-not (Test-Path $finalExe)) {
+              throw "Final package does not contain ArmorPaint.exe."
+          }
+
+          $files = Get-ChildItem `
+              -Path $artifact `
+              -Recurse `
+              -File
+
+          if (-not $files) {
+              throw "Final artifact is empty."
+          }
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "FINAL PACKAGE"
+          Write-Host "=========================================="
+
+          $files |
+              ForEach-Object {
+                  $relative = $_.FullName.Substring($artifact.Length).TrimStart("\")
+                  Write-Host "$relative  [$($_.Length) bytes]"
+              }
+
+          Write-Host ""
+          Write-Host "Total files: $($files.Count)"
+          Write-Host "Package: $artifact"
+
+      # ============================================================
+      # 7. Upload
+      # ============================================================
+      - name: Upload ArmorPaint Windows x64
         uses: actions/upload-artifact@v4
         with:
           name: ArmorPaint-Windows-x64
           path: artifact
-          compression-level: 0
           if-no-files-found: error
-          
+          compression-level: 0
