@@ -39,32 +39,81 @@ jobs:
           arch: x64
 
       # ============================================================
-      # 3. Gerar Arquivos da Solution (.sln) via make.bat
+      # 3. Gerar Arquivos da Solution (.sln) - processo oficial atual
+      #
+      #    O processo antigo (pasta "paint" + "base\make.bat") não
+      #    existe mais. O fluxo correto, segundo o README oficial de
+      #    armory3d/armorpaint, é:
+      #
+      #      node armorcore/make -g direct3d11      (na raiz do repo)
+      #      cd armorcore
+      #      -> extrair v8_monolith.7z
+      #      git apply patch/window_handling.diff --directory=Kinc
+      #      node Kinc/make -g direct3d11           (gera build\ArmorPaint.sln)
       # ============================================================
-      - name: Generate ArmorPaint project
+      - name: Generate Kha/Krom export (armorcore)
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT VIA MAKE.BAT"
+          Write-Host "STEP 3.1 - EXPORTING ASSETS/KROM VIA armorcore/make"
           Write-Host "=========================================="
-          
-          if (-not (Test-Path "paint")) {
-              Write-Error "A pasta 'paint' não foi encontrada."
+
+          if (-not (Test-Path "armorcore")) {
+              Write-Error "A pasta 'armorcore' (submódulo) não foi encontrada. Verifique o checkout com submodules: recursive."
               exit 1
           }
-          
-          # Entra na pasta do aplicativo conforme documentação oficial
-          cd paint
-          Write-Host "Diretório atual: $(Get-Location)"
-          
-          # Executa o make.bat da base com o gerador direct3d11 via CMD
-          cmd.exe /c "..\base\make.bat -g direct3d11"
-          
+
+          node armorcore\make -g direct3d11
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "O make.bat falhou com código $LASTEXITCODE."
+              Write-Error "node armorcore/make falhou com código $LASTEXITCODE."
               exit $LASTEXITCODE
           }
-          
+
+      - name: Unpack v8_monolith.7z
+        shell: powershell
+        run: |
+          Write-Host "=========================================="
+          Write-Host "STEP 3.2 - EXTRACTING v8_monolith.7z"
+          Write-Host "=========================================="
+
+          $sevenZip = "7z"
+          $archive = "armorcore\v8\libraries\win32\release\v8_monolith.7z"
+          $destination = "armorcore\v8\libraries\win32\release"
+
+          if (-not (Test-Path $archive)) {
+              Write-Error "Arquivo $archive não encontrado."
+              exit 1
+          }
+
+          & $sevenZip x $archive -o"$destination" -y
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Falha ao extrair v8_monolith.7z (código $LASTEXITCODE)."
+              exit $LASTEXITCODE
+          }
+
+      - name: Apply window_handling patch
+        shell: bash
+        run: |
+          set -e
+          echo "=========================================="
+          echo "STEP 3.3 - APPLYING window_handling.diff TO Kinc"
+          echo "=========================================="
+          cd armorcore
+          git apply patch/window_handling.diff --directory=Kinc
+
+      - name: Generate ArmorPaint Visual Studio project (Kinc/make)
+        shell: powershell
+        run: |
+          Write-Host "=========================================="
+          Write-Host "STEP 3.4 - GENERATING .sln VIA Kinc/make"
+          Write-Host "=========================================="
+
+          cd armorcore
+          node Kinc\make -g direct3d11
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "node Kinc/make falhou com código $LASTEXITCODE."
+              exit $LASTEXITCODE
+          }
           cd ..
 
       # ============================================================
@@ -76,22 +125,27 @@ jobs:
           Write-Host "=========================================="
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
-          
-          # Procura a solution gerada em qualquer diretório do workspace
+
+          # A solution normalmente fica em armorcore\build\ArmorPaint.sln,
+          # mas buscamos recursivamente para tolerar pequenas mudanças de layout.
           $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          
+
           if (-not $sln) {
               Write-Error "ArmorPaint.sln não foi gerado."
               Write-Host "Listando diretórios de build para debug:"
               Get-ChildItem -Filter "*build*" -Directory -Recurse -ErrorAction SilentlyContinue
               exit 1
           }
-          
+
           Write-Host "Compilando: $($sln.FullName)"
           msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
       # 5. Montar Pacote Final (Artefato)
+      #
+      #    O export do passo 3.1 gera os assets/krom.js em
+      #    <raiz>\build\krom. O executável nativo compilado fica em
+      #    algum subdiretório de armorcore\build (ex.: x64\Release).
       # ============================================================
       - name: Create complete package
         shell: powershell
@@ -99,35 +153,35 @@ jobs:
           Write-Host "=========================================="
           Write-Host "ASSEMBLING ARTIFACT"
           Write-Host "=========================================="
-          
+
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
-          
-          # A) Localizar e copiar a pasta krom (Contém krom.js, shaders e dados)
-          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
-                  Where-Object { Test-Path (Join-Path $_.FullName "krom.js") } | 
+
+          # A) Localizar e copiar a pasta krom (contém krom.js, shaders e dados)
+          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { Test-Path (Join-Path $_.FullName "krom.js") } |
                   Select-Object -First 1
-                  
+
           if (-not $krom) {
               Write-Error "Pasta krom com krom.js não foi encontrada."
               exit 1
           }
-          
+
           Write-Host "Copiando arquivos krom de: $($krom.FullName)"
           Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
-          
+
           # B) Localizar o executável compilado (.exe)
-          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Directory.Name -ne "krom" } | 
+          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Directory.Name -ne "krom" } |
                  Select-Object -First 1
-                 
+
           if (-not $exe) {
               Write-Error "ArmorPaint.exe compilado não encontrado."
               exit 1
           }
-          
+
           Write-Host "Copiando executável de: $($exe.FullName)"
           Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
-          
+
           Write-Host "=========================================="
           Write-Host "FINAL PACKAGE CONTENT"
           Write-Host "=========================================="
@@ -143,4 +197,3 @@ jobs:
           path: artifact
           compression-level: 0
           if-no-files-found: error
-          
