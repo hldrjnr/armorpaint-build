@@ -8,13 +8,19 @@ jobs:
     runs-on: windows-latest
     steps:
       # ============================================================
-      # 1. Baixar o Repositório Oficial do ArmorPaint
+      # 1. Checkout do Repositório Oficial + Submódulos Profundos
       # ============================================================
       - name: Checkout Official ArmorPaint
         uses: actions/checkout@v4
         with:
           repository: armory3d/armorpaint
           submodules: recursive
+          fetch-depth: 0
+
+      - name: Initialize Nested Submodules
+        shell: bash
+        run: |
+          git submodule update --init --recursive
 
       # ============================================================
       # 2. Configurar Ferramentas (Node.js + MSBuild + MSVC)
@@ -33,44 +39,36 @@ jobs:
           arch: x64
 
       # ============================================================
-      # 3. Instalar Dependências da Engine Base
-      # ============================================================
-      - name: Install Engine Dependencies
-        shell: powershell
-        run: |
-          Write-Host "=========================================="
-          Write-Host "INSTALLING BASE DEPENDENCIES"
-          Write-Host "=========================================="
-          
-          if (-not (Test-Path "base")) {
-              Write-Error "A pasta 'base' não foi encontrada."
-              exit 1
-          }
-          
-          cd base
-          npm install
-          cd ..
-
-      # ============================================================
-      # 4. Gerar Arquivos da Solution (.sln)
+      # 3. Gerar Arquivos da Solution (.sln) via make.bat
       # ============================================================
       - name: Generate ArmorPaint project
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT VIA BASE MAKE"
+          Write-Host "GENERATING PROJECT VIA MAKE.BAT"
           Write-Host "=========================================="
           
-          # Executa o make da engine base apontando para o app paint
-          node base/make --to paint -g direct3d11
+          if (-not (Test-Path "paint")) {
+              Write-Error "A pasta 'paint' não foi encontrada."
+              exit 1
+          }
+          
+          # Entra na pasta do aplicativo conforme documentação oficial
+          cd paint
+          Write-Host "Diretório atual: $(Get-Location)"
+          
+          # Executa o make.bat da base com o gerador direct3d11 via CMD
+          cmd.exe /c "..\base\make.bat -g direct3d11"
           
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "A geração do projeto falhou."
+              Write-Error "O make.bat falhou com código $LASTEXITCODE."
               exit $LASTEXITCODE
           }
+          
+          cd ..
 
       # ============================================================
-      # 5. Compilar a Solution Gerada
+      # 4. Compilar a Solution Gerada
       # ============================================================
       - name: Build ArmorPaint Release x64
         shell: powershell
@@ -79,11 +77,13 @@ jobs:
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
           
-          # Procura a solution gerada em qualquer subpasta
+          # Procura a solution gerada em qualquer diretório do workspace
           $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           
           if (-not $sln) {
               Write-Error "ArmorPaint.sln não foi gerado."
+              Write-Host "Listando diretórios de build para debug:"
+              Get-ChildItem -Filter "*build*" -Directory -Recurse -ErrorAction SilentlyContinue
               exit 1
           }
           
@@ -91,7 +91,7 @@ jobs:
           msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
-      # 6. Montar Pacote Final (Artefato)
+      # 5. Montar Pacote Final (Artefato)
       # ============================================================
       - name: Create complete package
         shell: powershell
@@ -134,7 +134,7 @@ jobs:
           Get-ChildItem ".\artifact" | Select-Object Name
 
       # ============================================================
-      # 7. Upload do Artefato
+      # 6. Upload do Artefato
       # ============================================================
       - name: Upload ArmorPaint
         uses: actions/upload-artifact@v4
