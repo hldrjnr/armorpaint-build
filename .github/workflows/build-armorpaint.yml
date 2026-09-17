@@ -39,7 +39,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT (NEW STRUCTURE)"
+          Write-Host "GENERATING PROJECT VIA NODE.JS"
           Write-Host "=========================================="
           
           if (-not (Test-Path "paint")) {
@@ -47,21 +47,18 @@ jobs:
               exit 1
           }
           
-          # Entra na pasta do aplicativo
           cd paint
-          
           Write-Host "Diretório atual: $(Get-Location)"
-          Write-Host "Executando o sistema de build para Direct3D 11..."
+          Write-Host "Executando make.js (Engine Base)..."
           
-          # Usa cmd.exe para chamar o make.bat da pasta base passando a flag obrigatória
-          cmd.exe /c "..\base\make -g direct3d11"
+          # Chama o script JS diretamente usando Node, evitando conflitos com GNU Make
+          node ..\base\make.js -g direct3d11
           
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "A geração do projeto falhou."
+              Write-Error "A geração do projeto falhou no Node.js."
               exit $LASTEXITCODE
           }
           
-          # Volta para a raiz
           cd ..
 
       # ============================================================
@@ -74,11 +71,13 @@ jobs:
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
           
-          # Procura a solution gerada dinamicamente
+          # Procura a solution gerada
           $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           
           if (-not $sln) {
-              Write-Error "ArmorPaint.sln não foi gerado. O script make pode ter falhado silenciosamente."
+              Write-Error "ArmorPaint.sln não foi gerado. O script make pode ter falhado."
+              Write-Host "Conteúdo da pasta paint:"
+              Get-ChildItem paint -Force
               exit 1
           }
           
@@ -97,7 +96,7 @@ jobs:
           
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
           
-          # A) Localizar e copiar a pasta krom (Dados, Shaders, JS)
+          # A) Localizar e copiar a pasta krom
           $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
                   Where-Object { $_.FullName -match "build[\\/]krom" } | 
                   Select-Object -First 1
