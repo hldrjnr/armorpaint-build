@@ -8,16 +8,17 @@ jobs:
     runs-on: windows-latest
     steps:
       # ============================================================
-      # 1. Baixar o Repositório Oficial do ArmorPaint
+      # 1. Checkout com Submódulos Recursivos Obrigatórios
       # ============================================================
       - name: Checkout Official ArmorPaint
         uses: actions/checkout@v4
         with:
           repository: armory3d/armorpaint
           submodules: recursive
+          fetch-depth: 0
 
       # ============================================================
-      # 2. Configurar Ferramentas 
+      # 2. Configurar Ferramentas (Node.js + MSBuild + MSVC)
       # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -33,46 +34,49 @@ jobs:
           arch: x64
 
       # ============================================================
-      # 3. Gerar Arquivos da Solution (.sln)
+      # 3. Gerar Arquivos da Solution (.sln) via Node.js na Raiz
       # ============================================================
       - name: Generate ArmorPaint project
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT VIA MAKE.BAT"
+          Write-Host "GENERATING PROJECT VIA KINC/BASE MAKE"
           Write-Host "=========================================="
           
-          if (-not (Test-Path "paint")) {
-              Write-Error "A pasta 'paint' não existe no repositório."
+          # Validar se a pasta base e paint existem
+          if (-not (Test-Path "base") -or -not (Test-Path "paint")) {
+              Write-Error "Estrutura de pastas 'base' ou 'paint' não encontrada."
               exit 1
           }
-          
-          # Entra na pasta do aplicativo
-          cd paint
-          Write-Host "Diretório atual: $(Get-Location)"
-          
-          # Validação de segurança: verificar se make.bat existe em base
-          if (-not (Test-Path "..\base\make.bat")) {
-              Write-Host "ERRO CRÍTICO: make.bat não foi encontrado na pasta 'base'."
-              Write-Host "Listando TODO o conteúdo de 'base' para depuração:"
-              Get-ChildItem "..\base" -Force
-              exit 1
+
+          # O comando oficial de build do ArmorPaint moderno é executado chamando 
+          # o make do Kinc localizado dentro de base/kinc, apontando para o app (paint)
+          # ou executando o make do base passando o projeto.
+          if (Test-Path "base\kinc\make.js") {
+              Write-Host "Usando base\kinc\make.js..."
+              node base/kinc/make --to paint -g direct3d11
+          } elseif (Test-Path "base\make.js") {
+              Write-Host "Usando base\make.js..."
+              node base/make --to paint -g direct3d11
+          } else {
+              Write-Host "Procurando make.js recursivamente..."
+              $makeJs = Get-ChildItem -Path "base" -Filter "make.js" -Recurse | Select-Object -First 1
+              if ($makeJs) {
+                  Write-Host "Encontrado em: $($makeJs.FullName)"
+                  node $($makeJs.FullName) --to paint -g direct3d11
+              } else {
+                  Write-Error "Nenhum script make.js foi localizado na pasta base."
+                  exit 1
+              }
           }
-          
-          Write-Host "Executando ..\base\make.bat -g direct3d11 ..."
-          
-          # Executa de forma isolada no CMD para não dar conflito com utilitários GNU do GitHub Actions
-          & cmd.exe /c "..\base\make.bat -g direct3d11"
-          
+
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "A execução de make.bat falhou com código $LASTEXITCODE."
+              Write-Error "A geração do projeto falhou."
               exit $LASTEXITCODE
           }
-          
-          cd ..
 
       # ============================================================
-      # 4. Compilar
+      # 4. Compilar a Solution Gerada
       # ============================================================
       - name: Build ArmorPaint Release x64
         shell: powershell
@@ -81,27 +85,21 @@ jobs:
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
           
-          # Procura a solution em todo o repositório
+          # O arquivo .sln geralmente é gerado dentro de base/build ou na raiz/build
           $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           
           if (-not $sln) {
-              Write-Error "ArmorPaint.sln não foi gerado!"
-              Write-Host "Listando conteúdo de paint\build para debugar o erro silencioso:"
-              if (Test-Path "paint\build") {
-                  Get-ChildItem "paint\build" -Recurse
-              } else {
-                  Write-Host "A pasta paint\build não foi criada."
-              }
+              Write-Error "ArmorPaint.sln não foi encontrado em nenhuma subpasta!"
+              Write-Host "Listando arquivos de build encontrados para debug:"
+              Get-ChildItem -Filter "*.sln" -Recurse
               exit 1
           }
           
           Write-Host "Solution encontrada em: $($sln.FullName)"
-          Write-Host "Iniciando compilação no MSBuild..."
-          
           msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
-      # 5. Montar Pacote Final
+      # 5. Montar Pacote Final (Artefato)
       # ============================================================
       - name: Create complete package
         shell: powershell
@@ -112,29 +110,36 @@ jobs:
           
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
           
-          # A) Localizar e copiar a pasta krom (Dados, Shaders)
-          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
-                  Where-Object { $_.FullName -match "build[\\/]krom" } | Select-Object -First 1
+          # A) Localizar a pasta krom gerada (contém krom.js e shaders)
+          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse | 
+                  Where-Object { Test-Path (Join-Path $_.FullName "krom.js") } | 
+                  Select-Object -First 1
                   
           if (-not $krom) {
-              $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          
-          if (-not $krom) {
-              Write-Error "Pasta krom não encontrada."
+              Write-Error "Pasta krom com krom.js não foi encontrada."
               exit 1
           }
-          Write-Host "Copiando pasta krom de: $($krom.FullName)"
+          
+          Write-Host "Copiando arquivos krom de: $($krom.FullName)"
           Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
           
-          # B) Localizar o executável (.exe)
-          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Directory.Name -ne "krom" } | Select-Object -First 1
+          # B) Localizar o executável compilado (ArmorPaint.exe ou Krom.exe renomeado)
+          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse | 
+                 Where-Object { $_.Directory.Name -ne "krom" } | 
+                 Select-Object -First 1
+
+          if (-not $exe) {
+              # Fallback caso o executável venha com o nome padrão antigo do Kinc (Krom.exe)
+              $exe = Get-ChildItem -Path . -Filter "Krom.exe" -Recurse | 
+                     Where-Object { $_.Directory.Name -ne "krom" } | 
+                     Select-Object -First 1
+          }
                  
           if (-not $exe) {
-              Write-Error "ArmorPaint.exe compilado não encontrado."
+              Write-Error "Executável compilado (.exe) não encontrado."
               exit 1
           }
+          
           Write-Host "Copiando executável de: $($exe.FullName)"
           Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
           
