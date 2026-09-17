@@ -23,7 +23,7 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
 
-      - name: Setup Visual Studio environment
+      - name: Setup Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -37,50 +37,114 @@ jobs:
           Write-Host "=== Clang ==="
           clang-cl --version
 
-          Write-Host "=== Node ==="
-          node --version
-
           Write-Host "=== Git ==="
           git --version
 
-      - name: Generate ArmorPaint Visual Studio project
-        shell: cmd
-        working-directory: paint
-        run: |
-          call ..\base\make.bat
+          Write-Host "=== Repository ==="
+          Get-ChildItem "$env:GITHUB_WORKSPACE" -Force
 
-      - name: Verify generated project
+      - name: Check ArmorPaint build tools
         shell: pwsh
         working-directory: paint
         run: |
-          Write-Host "=== Build directory ==="
+          Write-Host "=== base ==="
+          Get-ChildItem ..\base -Force
+
+          Write-Host "=== Windows tools ==="
+
+          if (Test-Path "..\base\tools\bin\windows_x64") {
+            Get-ChildItem ..\base\tools\bin\windows_x64 -Force
+          }
+          else {
+            Write-Host "windows_x64 tool directory does not exist."
+          }
+
+          Write-Host "=== amake ==="
+
+          $amake = "..\base\tools\bin\windows_x64\amake.exe"
+
+          if (Test-Path $amake) {
+            Write-Host "amake.exe found:"
+            Get-Item $amake
+          }
+          else {
+            throw "amake.exe was not found."
+          }
+
+      - name: Generate ArmorPaint project
+        shell: cmd
+        working-directory: paint
+        run: |
+          echo ===== Running make.bat =====
+          call ..\base\make.bat
+          echo ===== make.bat finished =====
+          echo ERRORLEVEL=%ERRORLEVEL%
+          exit /b %ERRORLEVEL%
+
+      - name: Inspect generated files
+        if: always()
+        shell: pwsh
+        working-directory: paint
+        run: |
+          Write-Host "======================================"
+          Write-Host "ARMORPAINT BUILD DIRECTORY"
+          Write-Host "======================================"
 
           if (Test-Path "build") {
-            Get-ChildItem "build" -Recurse -File |
-              Select-Object FullName
+            Get-ChildItem "build" -Recurse -Force |
+              Select-Object FullName, Length, LastWriteTime
+          }
+          else {
+            Write-Host "NO build DIRECTORY EXISTS."
           }
 
-          $sln = Get-ChildItem "build" -Recurse -Filter "ArmorPaint.sln" -File |
-            Select-Object -First 1
+          Write-Host "======================================"
+          Write-Host "SEARCHING FOR SOLUTIONS"
+          Write-Host "======================================"
 
-          if (-not $sln) {
-            throw "ArmorPaint.sln was not generated."
+          Get-ChildItem . -Recurse -Include *.sln,*.slnx,*.vcxproj -File -ErrorAction SilentlyContinue |
+            Select-Object FullName
+
+          Write-Host "======================================"
+          Write-Host "SEARCHING FOR EXECUTABLES"
+          Write-Host "======================================"
+
+          Get-ChildItem . -Recurse -Filter *.exe -File -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length
+
+      - name: Locate generated Visual Studio project
+        shell: pwsh
+        working-directory: paint
+        run: |
+          $projects = Get-ChildItem . -Recurse -File |
+            Where-Object {
+              $_.Extension -in @(".sln", ".slnx", ".vcxproj") -and
+              $_.Name -match "ArmorPaint"
+            }
+
+          if (-not $projects) {
+            throw "No ArmorPaint Visual Studio project was generated. Check the previous diagnostic step."
           }
 
-          Write-Host "Found solution:"
-          Write-Host $sln.FullName
+          Write-Host "Found project(s):"
 
-          "ARMORPAINT_SLN=$($sln.FullName)" |
+          $projects | ForEach-Object {
+            Write-Host $_.FullName
+          }
+
+          $project = $projects | Select-Object -First 1
+
+          "ARMORPAINT_PROJECT=$($project.FullName)" |
             Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Build ArmorPaint Release x64
+      - name: Build ArmorPaint
         shell: pwsh
         working-directory: paint
         run: |
           Write-Host "Building:"
-          Write-Host $env:ARMORPAINT_SLN
+          Write-Host $env:ARMORPAINT_PROJECT
 
-          msbuild "$env:ARMORPAINT_SLN" `
+          msbuild "$env:ARMORPAINT_PROJECT" `
             /m `
             /p:Configuration=Release `
             /p:Platform=x64 `
@@ -90,18 +154,11 @@ jobs:
         shell: pwsh
         working-directory: paint
         run: |
-          Write-Host "Searching for ArmorPaint.exe..."
-
-          $exe = Get-ChildItem "build" -Recurse -Filter "ArmorPaint.exe" -File |
-            Sort-Object Length -Descending |
+          $exe = Get-ChildItem . -Recurse -Filter "ArmorPaint.exe" -File |
             Select-Object -First 1
 
           if (-not $exe) {
-            Write-Host "=== Build contents ==="
-            Get-ChildItem "build" -Recurse -File |
-              Select-Object FullName, Length
-
-            throw "ArmorPaint.exe was not found."
+            throw "ArmorPaint.exe was not found after compilation."
           }
 
           Write-Host "Found:"
@@ -110,7 +167,7 @@ jobs:
           "ARMORPAINT_EXE=$($exe.FullName)" |
             Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Prepare portable package
+      - name: Package build
         shell: pwsh
         working-directory: paint
         run: |
@@ -120,84 +177,34 @@ jobs:
             $env:GITHUB_WORKSPACE `
             "ArmorPaint-Windows-x64"
 
-          if (Test-Path $package) {
-            Remove-Item $package -Recurse -Force
-          }
-
           New-Item `
             -ItemType Directory `
-            -Path $package | Out-Null
-
-          Write-Host "Copying executable..."
+            -Path $package `
+            -Force | Out-Null
 
           Copy-Item `
             $exe.FullName `
             (Join-Path $package "ArmorPaint.exe") `
             -Force
 
-          Write-Host "Searching for required DLLs..."
-
           Get-ChildItem `
             $exe.Directory.FullName `
             -Filter "*.dll" `
             -File `
             -ErrorAction SilentlyContinue |
-            ForEach-Object {
-              Copy-Item `
-                $_.FullName `
-                $package `
-                -Force
-            }
-
-          Write-Host "Searching for runtime/data files..."
-
-          $possibleDirs = @(
-            (Join-Path $exe.Directory.FullName "data"),
-            (Join-Path $exe.Directory.FullName "krom"),
-            (Join-Path $exe.Directory.FullName "assets")
-          )
-
-          foreach ($dir in $possibleDirs) {
-            if (Test-Path $dir) {
-              Copy-Item `
-                $dir `
-                $package `
-                -Recurse `
-                -Force
-            }
-          }
-
-          $info = @"
-          ArmorPaint Windows x64
-          Built from:
-          https://github.com/armory3d/armorpaint
-
-          Configuration: Release
-          Platform: x64
-
-          This is a self-built development build.
-          "@
-
-          Set-Content `
-            -Path (Join-Path $package "BUILD-INFO.txt") `
-            -Value $info
-
-          Write-Host "=== Final package ==="
-
-          Get-ChildItem `
-            $package `
-            -Recurse |
-            Select-Object FullName, Length
+            Copy-Item `
+              -Destination $package `
+              -Force
 
           Compress-Archive `
             -Path "$package\*" `
             -DestinationPath "$env:GITHUB_WORKSPACE\ArmorPaint-Windows-x64.zip" `
             -Force
 
-      - name: Upload ArmorPaint build
+      - name: Upload build
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ArmorPaint-Windows-x64
           path: ArmorPaint-Windows-x64.zip
-          if-no-files-found: error
           retention-days: 7
