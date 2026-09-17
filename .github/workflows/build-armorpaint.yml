@@ -6,21 +6,13 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-
-      # ============================================================
-      # 1. Checkout
-      # ============================================================
       - name: Checkout ArmorPaint
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      # ============================================================
-      # 2. Setup (Node.js + Visual Studio)
-      # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -34,17 +26,13 @@ jobs:
         with:
           arch: x64
 
-      # ============================================================
-      # 3. Gerar o projeto Visual Studio via Node.js
-      # ============================================================
       - name: Generate ArmorPaint project
         shell: powershell
         run: |
           Write-Host "=========================================="
           Write-Host "GENERATING PROJECT VIA NODE.JS"
           Write-Host "=========================================="
-
-          # O ArmorPaint moderno usa armorcore; versões antigas usam Kinc direto
+          
           if (Test-Path "armorcore\make.js") {
               Write-Host "Usando gerador ArmorCore..."
               node armorcore/make -g direct3d11
@@ -56,9 +44,6 @@ jobs:
               exit 1
           }
 
-      # ============================================================
-      # 4. Compilar a Solution
-      # ============================================================
       - name: Build ArmorPaint Release x64
         shell: powershell
         run: |
@@ -70,23 +55,19 @@ jobs:
               Write-Error "ArmorPaint.sln não foi gerado."
               exit 1
           }
-
+          
           msbuild build/ArmorPaint.sln /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
-      # ============================================================
-      # 5. Montar pacote completo
-      # ============================================================
       - name: Create complete package
         shell: powershell
         run: |
           Write-Host "=========================================="
           Write-Host "ASSEMBLING ARTIFACT"
           Write-Host "=========================================="
-
-          # Criar pasta do pacote final
+          
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
-
-          # A) Localizar e copiar a pasta Krom (contém krom.js, shaders, dados)
+          
+          # A) Localizar e copiar a pasta Krom
           $krom = Get-ChildItem -Path ".\build" -Directory -Filter "krom" -Recurse | Select-Object -First 1
           if (-not $krom) {
               Write-Error "Pasta krom não encontrada."
@@ -94,29 +75,21 @@ jobs:
           }
           Write-Host "Copiando arquivos krom..."
           Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
-
-          # B) Localizar o executável compilado 
-          # Ignoramos executáveis que já caíram numa pasta krom acidentalmente
-          $exe = Get-ChildItem -Path ".\build" -Filter "ArmorPaint.exe" -Recurse |
-                 Where-Object { $_.Directory.Name -ne "krom" } |
-                 Select-Object -First 1
-
+          
+          # B) Localizar e copiar o executável
+          $exe = Get-ChildItem -Path ".\build" -Filter "ArmorPaint.exe" -Recurse | Where-Object { $_.Directory.Name -ne "krom" } | Select-Object -First 1
           if (-not $exe) {
               Write-Error "ArmorPaint.exe não encontrado."
               exit 1
           }
           Write-Host "Copiando executável: $($exe.FullName)"
           Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
-
-          Write-Host ""
+          
           Write-Host "=========================================="
           Write-Host "FINAL PACKAGE CONTENT"
           Write-Host "=========================================="
           Get-ChildItem ".\artifact" | Select-Object Name
 
-      # ============================================================
-      # 6. Upload
-      # ============================================================
       - name: Upload ArmorPaint
         uses: actions/upload-artifact@v4
         with:
@@ -124,64 +97,4 @@ jobs:
           path: artifact
           compression-level: 0
           if-no-files-found: error
-     Write-Host "=========================================="
-          Write-Host "FINAL PACKAGE"
-          Write-Host "=========================================="
-
-
-          $files = Get-ChildItem `
-            ".\artifact" `
-            -Recurse `
-            -File
-
-
-          foreach ($file in $files) {
-
-            Write-Host $file.FullName
-
-          }
-
-
-          $size = (
-            $files |
-            Measure-Object Length -Sum
-          ).Sum
-
-
-          Write-Host ""
-          Write-Host (
-            "TOTAL SIZE: {0:N2} MB" -f ($size / 1MB)
-          )
-
-
-          if (-not (Test-Path ".\artifact\ArmorPaint.exe")) {
-
-            Write-Error `
-              "ArmorPaint.exe não está no pacote."
-
-            exit 1
-
-          }
-
-
-          if (-not (Test-Path ".\artifact\krom.js")) {
-
-            Write-Error `
-              "krom.js não está no pacote."
-
-            exit 1
-
-          }
-
-
-      # ============================================================
-      # 11. Upload
-      # ============================================================
-
-      - name: Upload ArmorPaint
-        uses: actions/upload-artifact@v4
-        with:
-          name: ArmorPaint-Windows-x64-complete
-          path: artifact
-          compression-level: 0
-          if-no-files-found: error
+          
