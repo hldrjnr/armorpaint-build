@@ -15,7 +15,7 @@ jobs:
         with:
           repository: armory3d/armorpaint
           submodules: recursive
-          fetch-depth: 1
+          # fetch-depth removido: garante que todos os commits dos submódulos sejam baixados
 
       # ============================================================
       # 2. Configurar Ferramentas
@@ -40,28 +40,21 @@ jobs:
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "SEARCHING FOR BUILD SYSTEM"
+          Write-Host "GENERATING PROJECT VIA NODE.JS"
           Write-Host "=========================================="
           
-          # Procura o make.js recursivamente na pasta armorcore ou Kinc
-          $makeJs = Get-ChildItem -Path . -Filter "make.js" -Recurse -ErrorAction SilentlyContinue | 
-                    Where-Object { $_.Directory.Name -match '^(armorcore|Kinc)$' } | 
-                    Select-Object -First 1
-          
-          if (-not $makeJs) {
-              Write-Error "make.js não encontrado. O clone oficial falhou."
+          if (Test-Path "armorcore\make.js") {
+              Write-Host "ArmorCore detectado. Gerando projeto..."
+              node armorcore/make -g direct3d11
+          } elseif (Test-Path "Kinc\make.js") {
+              Write-Host "Kinc detectado. Gerando projeto..."
+              node Kinc/make -g direct3d11
+          } else {
+              Write-Host "ERRO: O make.js não foi encontrado. Conteúdo atual da raiz:"
+              Get-ChildItem -Force
+              Write-Error "O download dos submódulos falhou ou a estrutura do repositório mudou."
               exit 1
           }
-          
-          $engineDir = $makeJs.Directory.Name
-          $projectRoot = $makeJs.Directory.Parent.FullName
-          
-          Write-Host "Projeto base encontrado em: $projectRoot"
-          Write-Host "Usando engine: $engineDir"
-          
-          # Vai até a raiz do código oficial e roda o node
-          Set-Location $projectRoot
-          node "$engineDir/make" -g direct3d11
 
       # ============================================================
       # 4. Compilar
@@ -73,16 +66,15 @@ jobs:
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
           
-          # Procura a solution gerada
-          $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          
-          if (-not $sln) {
-              Write-Error "ArmorPaint.sln não foi gerado."
+          if (-not (Test-Path "build\ArmorPaint.sln")) {
+              Write-Host "ERRO: ArmorPaint.sln não foi gerado. Conteúdo da pasta build:"
+              if (Test-Path "build") { Get-ChildItem "build" -Force }
+              Write-Error "Falha na geração do projeto."
               exit 1
           }
           
-          Write-Host "Compilando: $($sln.FullName)"
-          msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
+          Write-Host "Compilando build\ArmorPaint.sln..."
+          msbuild build\ArmorPaint.sln /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
       # 5. Montar Pacote Final
@@ -96,28 +88,26 @@ jobs:
           
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
           
-          # A) Localizar e copiar a pasta Krom correta (a que contém o krom.js)
-          $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
-                  Where-Object { Test-Path (Join-Path $_.FullName "krom.js") } | 
-                  Select-Object -First 1
-                  
-          if (-not $krom) {
-              Write-Error "Pasta krom (contendo krom.js) não encontrada."
+          # A) Localizar e copiar a pasta Krom correta (a que contém os shaders e dados)
+          if (-not (Test-Path "build\krom\krom.js")) {
+              Write-Error "Arquivos essenciais (build\krom\krom.js) não encontrados."
               exit 1
           }
-          Write-Host "Copiando arquivos krom de: $($krom.FullName)"
-          Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
+          
+          Write-Host "Copiando pasta krom..."
+          Copy-Item "build\krom\*" ".\artifact\" -Recurse -Force
           
           # B) Localizar o executável compilado ignorando pastas indesejadas
-          $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.FullName -notmatch "krom[\\/]ArmorPaint\.exe" } | 
+          $exe = Get-ChildItem -Path ".\build" -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
+                 Where-Object { $_.Directory.Name -ne "krom" } | 
                  Select-Object -First 1
                  
           if (-not $exe) {
               Write-Error "ArmorPaint.exe compilado não encontrado."
               exit 1
           }
-          Write-Host "Copiando executável de: $($exe.FullName)"
+          
+          Write-Host "Copiando executável compilado ($($exe.Name))..."
           Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
           
           Write-Host "=========================================="
