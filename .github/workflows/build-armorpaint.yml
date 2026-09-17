@@ -39,23 +39,33 @@ jobs:
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "GENERATING PROJECT VIA NODE.JS"
+          Write-Host "GENERATING PROJECT VIA MAKE.BAT"
           Write-Host "=========================================="
           
           if (-not (Test-Path "paint")) {
-              Write-Error "A pasta 'paint' não existe no repositório baixado."
+              Write-Error "A pasta 'paint' não existe no repositório."
               exit 1
           }
           
+          # Entra na pasta do aplicativo
           cd paint
           Write-Host "Diretório atual: $(Get-Location)"
-          Write-Host "Executando make.js (Engine Base)..."
           
-          # Chama o script JS diretamente usando Node, evitando conflitos com GNU Make
-          node ..\base\make.js -g direct3d11
+          # Validação de segurança: verificar se make.bat existe em base
+          if (-not (Test-Path "..\base\make.bat")) {
+              Write-Host "ERRO CRÍTICO: make.bat não foi encontrado na pasta 'base'."
+              Write-Host "Listando TODO o conteúdo de 'base' para depuração:"
+              Get-ChildItem "..\base" -Force
+              exit 1
+          }
+          
+          Write-Host "Executando ..\base\make.bat -g direct3d11 ..."
+          
+          # Executa de forma isolada no CMD para não dar conflito com utilitários GNU do GitHub Actions
+          & cmd.exe /c "..\base\make.bat -g direct3d11"
           
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "A geração do projeto falhou no Node.js."
+              Write-Error "A execução de make.bat falhou com código $LASTEXITCODE."
               exit $LASTEXITCODE
           }
           
@@ -71,17 +81,23 @@ jobs:
           Write-Host "BUILDING SOLUTION"
           Write-Host "=========================================="
           
-          # Procura a solution gerada
+          # Procura a solution em todo o repositório
           $sln = Get-ChildItem -Path . -Filter "ArmorPaint.sln" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           
           if (-not $sln) {
-              Write-Error "ArmorPaint.sln não foi gerado. O script make pode ter falhado."
-              Write-Host "Conteúdo da pasta paint:"
-              Get-ChildItem paint -Force
+              Write-Error "ArmorPaint.sln não foi gerado!"
+              Write-Host "Listando conteúdo de paint\build para debugar o erro silencioso:"
+              if (Test-Path "paint\build") {
+                  Get-ChildItem "paint\build" -Recurse
+              } else {
+                  Write-Host "A pasta paint\build não foi criada."
+              }
               exit 1
           }
           
-          Write-Host "Compilando: $($sln.FullName)"
+          Write-Host "Solution encontrada em: $($sln.FullName)"
+          Write-Host "Iniciando compilação no MSBuild..."
+          
           msbuild $sln.FullName /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
@@ -96,26 +112,24 @@ jobs:
           
           New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
           
-          # A) Localizar e copiar a pasta krom
+          # A) Localizar e copiar a pasta krom (Dados, Shaders)
           $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | 
-                  Where-Object { $_.FullName -match "build[\\/]krom" } | 
-                  Select-Object -First 1
+                  Where-Object { $_.FullName -match "build[\\/]krom" } | Select-Object -First 1
                   
           if (-not $krom) {
               $krom = Get-ChildItem -Path . -Directory -Filter "krom" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           }
           
           if (-not $krom) {
-              Write-Error "Pasta com os dados krom não encontrada."
+              Write-Error "Pasta krom não encontrada."
               exit 1
           }
-          Write-Host "Copiando recursos (krom) de: $($krom.FullName)"
+          Write-Host "Copiando pasta krom de: $($krom.FullName)"
           Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
           
-          # B) Localizar o executável compilado
+          # B) Localizar o executável (.exe)
           $exe = Get-ChildItem -Path . -Filter "ArmorPaint.exe" -Recurse -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Directory.Name -ne "krom" } | 
-                 Select-Object -First 1
+                 Where-Object { $_.Directory.Name -ne "krom" } | Select-Object -First 1
                  
           if (-not $exe) {
               Write-Error "ArmorPaint.exe compilado não encontrado."
