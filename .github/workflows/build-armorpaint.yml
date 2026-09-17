@@ -5,23 +5,68 @@ on:
 
 jobs:
   build:
+    name: Build ArmorPaint
     runs-on: windows-latest
 
     steps:
 
       # ============================================================
-      # 1. Checkout
+      # 1. BAIXAR O CÓDIGO OFICIAL DO ARMORPAINT
       # ============================================================
 
-      - name: Checkout ArmorPaint
+      - name: Checkout official ArmorPaint
         uses: actions/checkout@v5
         with:
+          repository: armory3d/armorpaint
+          ref: main
           submodules: recursive
           fetch-depth: 1
 
 
       # ============================================================
-      # 2. Visual Studio
+      # 2. VERIFICAR SE O CÓDIGO FOI BAIXADO
+      # ============================================================
+
+      - name: Verify source
+        shell: powershell
+        run: |
+
+          Write-Host "=========================================="
+          Write-Host "ARMORPAINT SOURCE"
+          Write-Host "=========================================="
+
+          Write-Host ""
+          Write-Host "Current directory:"
+          Get-Location
+
+          Write-Host ""
+          Write-Host "Repository contents:"
+          Get-ChildItem -Force
+
+          Write-Host ""
+          Write-Host "Checking required directories..."
+
+          if (-not (Test-Path ".\base")) {
+              Write-Error "Pasta base não encontrada."
+              exit 1
+          }
+
+          if (-not (Test-Path ".\paint")) {
+              Write-Error "Pasta paint não encontrada."
+              exit 1
+          }
+
+          if (-not (Test-Path ".\base\make.bat")) {
+              Write-Error "base\make.bat não encontrado."
+              exit 1
+          }
+
+          Write-Host ""
+          Write-Host "OK - ArmorPaint source encontrado."
+
+
+      # ============================================================
+      # 3. VISUAL STUDIO / MSBUILD
       # ============================================================
 
       - name: Setup MSBuild
@@ -34,185 +79,46 @@ jobs:
 
 
       # ============================================================
-      # 3. Descobrir a estrutura REAL do repositório
+      # 4. GERAR PROJETO VISUAL STUDIO
+      #
+      # O README oficial manda:
+      #
+      # cd armorpaint/paint
+      # ..\base\make
       # ============================================================
 
-      - name: Inspect repository
-        shell: powershell
+      - name: Generate Visual Studio project
+        shell: cmd
+        working-directory: paint
         run: |
 
-          Write-Host "=========================================="
-          Write-Host "CURRENT DIRECTORY"
-          Write-Host "=========================================="
+          echo ==========================================
+          echo GENERATING ARMORPAINT PROJECT
+          echo ==========================================
 
-          Get-Location
+          echo Current directory:
+          cd
 
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "ROOT CONTENT"
-          Write-Host "=========================================="
+          echo.
+          echo Running:
+          echo ..\base\make.bat
 
-          Get-ChildItem -Force
+          call ..\base\make.bat
 
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "ALL MAKE.BAT FILES"
-          Write-Host "=========================================="
-
-          $makes = Get-ChildItem `
-            -Path $PWD `
-            -Filter "make.bat" `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue
-
-          if ($makes.Count -eq 0) {
-            Write-Error "Nenhum make.bat encontrado."
-            exit 1
-          }
-
-          foreach ($make in $makes) {
-            Write-Host $make.FullName
-          }
-
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "ALL MAKE FILES"
-          Write-Host "=========================================="
-
-          Get-ChildItem `
-            -Path $PWD `
-            -Include "make","make.sh","Makefile","make.bat" `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Select-Object FullName
-
-
-      # ============================================================
-      # 4. Encontrar e executar o make.bat correto
-      # ============================================================
-
-      - name: Generate ArmorPaint project
-        shell: powershell
-        run: |
-
-          Write-Host "=========================================="
-          Write-Host "SEARCHING FOR ARMORPAINT MAKE.BAT"
-          Write-Host "=========================================="
-
-
-          $repo = $PWD
-
-
-          # Procurar todos os make.bat
-          $makes = @(
-            Get-ChildItem `
-              -Path $repo `
-              -Filter "make.bat" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue
+          if errorlevel 1 (
+              echo.
+              echo ==========================================
+              echo MAKE FAILED
+              echo ==========================================
+              exit /b 1
           )
 
-
-          if ($makes.Count -eq 0) {
-            Write-Error "Nenhum make.bat encontrado."
-            exit 1
-          }
-
-
-          Write-Host ""
-          Write-Host "Encontrados:"
-
-          foreach ($make in $makes) {
-            Write-Host $make.FullName
-          }
-
-
-          # ----------------------------------------------------------
-          # Preferir um make.bat localizado em uma pasta chamada base
-          # ----------------------------------------------------------
-
-          $make = $makes |
-            Where-Object {
-              $_.Directory.Name -eq "base"
-            } |
-            Select-Object -First 1
-
-
-          # ----------------------------------------------------------
-          # Se não encontrou, procurar um make.bat que tenha
-          # ArmorPaint relacionado na estrutura.
-          # ----------------------------------------------------------
-
-          if (-not $make) {
-
-            $make = $makes |
-              Where-Object {
-                $_.FullName -match "armorpaint"
-              } |
-              Select-Object -First 1
-
-          }
-
-
-          # ----------------------------------------------------------
-          # Último recurso: primeiro make.bat encontrado
-          # ----------------------------------------------------------
-
-          if (-not $make) {
-
-            Write-Host ""
-            Write-Host "Não foi possível identificar automaticamente."
-            Write-Host "Usando o primeiro make.bat."
-
-            $make = $makes | Select-Object -First 1
-
-          }
-
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "MAKE.BAT SELECIONADO"
-          Write-Host "=========================================="
-
-          Write-Host $make.FullName
-
-
-          # ----------------------------------------------------------
-          # Executar no diretório do próprio make.bat
-          # ----------------------------------------------------------
-
-          Set-Location $make.Directory.FullName
-
-
-          Write-Host ""
-          Write-Host "Working directory:"
-          Get-Location
-
-
-          Write-Host ""
-          Write-Host "Executando make.bat..."
-
-
-          & $make.FullName
-
-
-          if ($LASTEXITCODE -ne 0) {
-
-            Write-Error `
-              "make.bat terminou com código $LASTEXITCODE."
-
-            exit $LASTEXITCODE
-
-          }
+          echo.
+          echo Make completed successfully.
 
 
       # ============================================================
-      # 5. Procurar ArmorPaint.sln
+      # 5. VERIFICAR SOLUTION
       # ============================================================
 
       - name: Find ArmorPaint solution
@@ -220,70 +126,60 @@ jobs:
         run: |
 
           Write-Host "=========================================="
-          Write-Host "SEARCHING FOR ARMORPAINT.SLN"
+          Write-Host "SEARCHING FOR ArmorPaint.sln"
           Write-Host "=========================================="
 
 
-          $solutions = @(
-            Get-ChildItem `
-              -Path $PWD `
+          $solution = Get-ChildItem `
+              -Path . `
               -Filter "ArmorPaint.sln" `
               -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue
-          )
-
-
-          if ($solutions.Count -eq 0) {
-
-            Write-Error "ArmorPaint.sln não foi encontrado."
-
-            Write-Host ""
-            Write-Host "Solutions disponíveis:"
-
-            Get-ChildItem `
-              -Path $PWD `
-              -Filter "*.sln" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object FullName
-
-            exit 1
-
-          }
-
-
-          foreach ($solution in $solutions) {
-
-            Write-Host ""
-            Write-Host "Solution:"
-            Write-Host $solution.FullName
-
-          }
-
-
-      # ============================================================
-      # 6. Compilar
-      # ============================================================
-
-      - name: Build ArmorPaint Release x64
-        shell: powershell
-        run: |
-
-          $solution = Get-ChildItem `
-            -Path $PWD `
-            -Filter "ArmorPaint.sln" `
-            -Recurse `
-            -File |
-            Select-Object -First 1
+              -File |
+              Select-Object -First 1
 
 
           if (-not $solution) {
 
-            Write-Error "ArmorPaint.sln não encontrado."
-            exit 1
+              Write-Error "ArmorPaint.sln não foi encontrado."
 
+              Write-Host ""
+              Write-Host "Solutions encontradas:"
+
+              Get-ChildItem `
+                  -Path . `
+                  -Filter "*.sln" `
+                  -Recurse `
+                  -File |
+                  Select-Object FullName
+
+              exit 1
+          }
+
+
+          Write-Host ""
+          Write-Host "Solution encontrada:"
+          Write-Host $solution.FullName
+
+
+      # ============================================================
+      # 6. COMPILAR RELEASE X64
+      # ============================================================
+
+      - name: Build Release x64
+        shell: powershell
+        run: |
+
+          $solution = Get-ChildItem `
+              -Path . `
+              -Filter "ArmorPaint.sln" `
+              -Recurse `
+              -File |
+              Select-Object -First 1
+
+
+          if (-not $solution) {
+              Write-Error "ArmorPaint.sln não encontrado."
+              exit 1
           }
 
 
@@ -297,101 +193,346 @@ jobs:
 
 
           & msbuild `
-            $solution.FullName `
-            /m `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
-            /verbosity:minimal
+              $solution.FullName `
+              /m `
+              /p:Configuration=Release `
+              /p:Platform=x64 `
+              /verbosity:minimal
 
 
           if ($LASTEXITCODE -ne 0) {
-
-            Write-Error "MSBuild falhou."
-            exit $LASTEXITCODE
-
+              Write-Error "MSBuild falhou."
+              exit $LASTEXITCODE
           }
 
 
+          Write-Host ""
+          Write-Host "Build concluído."
+
+
       # ============================================================
-      # 7. Procurar executável
+      # 7. LOCALIZAR EXECUTÁVEL
       # ============================================================
 
-      - name: Find ArmorPaint executable
+      - name: Find ArmorPaint.exe
         shell: powershell
         run: |
 
           Write-Host "=========================================="
-          Write-Host "SEARCHING FOR ARMORPAINT.EXE"
+          Write-Host "SEARCHING FOR ArmorPaint.exe"
           Write-Host "=========================================="
 
 
-          $executables = @(
-            Get-ChildItem `
-              -Path $PWD `
+          $executables = Get-ChildItem `
+              -Path . `
               -Filter "ArmorPaint.exe" `
               -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue
-          )
+              -File
 
 
           if ($executables.Count -eq 0) {
-
-            Write-Error "ArmorPaint.exe não encontrado."
-            exit 1
-
+              Write-Error "ArmorPaint.exe não encontrado."
+              exit 1
           }
 
 
           foreach ($exe in $executables) {
 
-            Write-Host ""
-            Write-Host $exe.FullName
+              Write-Host ""
+              Write-Host $exe.FullName
 
-            Write-Host (
-              "Size: {0:N2} MB" -f ($exe.Length / 1MB)
-            )
-
+              Write-Host (
+                  "Size: {0:N2} MB" -f ($exe.Length / 1MB)
+              )
           }
 
 
       # ============================================================
-      # 8. Encontrar build/krom
+      # 8. LOCALIZAR build\krom
       # ============================================================
 
-      - name: Locate krom directory
+      - name: Find krom directory
         shell: powershell
         run: |
 
           Write-Host "=========================================="
-          Write-Host "SEARCHING FOR KROM DIRECTORY"
+          Write-Host "SEARCHING FOR build\krom"
           Write-Host "=========================================="
 
 
-          $kroms = @(
-            Get-ChildItem `
-              -Path $PWD `
+          $krom = Get-ChildItem `
+              -Path . `
               -Directory `
               -Filter "krom" `
+              -Recurse |
+              Where-Object {
+                  Test-Path (Join-Path $_.FullName "krom.js")
+              } |
+              Select-Object -First 1
+
+
+          if (-not $krom) {
+
+              Write-Error `
+                  "Pasta build\krom com krom.js não encontrada."
+
+              Write-Host ""
+              Write-Host "Pastas krom encontradas:"
+
+              Get-ChildItem `
+                  -Path . `
+                  -Directory `
+                  -Filter "krom" `
+                  -Recurse |
+                  Select-Object FullName
+
+              exit 1
+          }
+
+
+          Write-Host ""
+          Write-Host "krom encontrado:"
+          Write-Host $krom.FullName
+
+
+      # ============================================================
+      # 9. COPIAR EXECUTÁVEL PARA build\krom
+      # ============================================================
+
+      - name: Prepare complete ArmorPaint package
+        shell: powershell
+        run: |
+
+          Write-Host "=========================================="
+          Write-Host "PREPARING COMPLETE PACKAGE"
+          Write-Host "=========================================="
+
+
+          # Encontrar krom que contém krom.js
+          $krom = Get-ChildItem `
+              -Path . `
+              -Directory `
+              -Filter "krom" `
+              -Recurse |
+              Where-Object {
+                  Test-Path (Join-Path $_.FullName "krom.js")
+              } |
+              Select-Object -First 1
+
+
+          if (-not $krom) {
+              Write-Error "build\krom não encontrado."
+              exit 1
+          }
+
+
+          # Encontrar ArmorPaint.exe compilado
+          $exe = Get-ChildItem `
+              -Path . `
+              -Filter "ArmorPaint.exe" `
               -Recurse `
-              -ErrorAction SilentlyContinue
+              -File |
+              Where-Object {
+                  $_.FullName -notlike "*\krom\ArmorPaint.exe"
+              } |
+              Select-Object -First 1
+
+
+          if (-not $exe) {
+              Write-Error "ArmorPaint.exe compilado não encontrado."
+              exit 1
+          }
+
+
+          Write-Host ""
+          Write-Host "Executable:"
+          Write-Host $exe.FullName
+
+
+          Write-Host ""
+          Write-Host "Krom:"
+          Write-Host $krom.FullName
+
+
+          # Copiar executável
+          Copy-Item `
+              $exe.FullName `
+              (Join-Path $krom.FullName "ArmorPaint.exe") `
+              -Force
+
+
+          Write-Host ""
+          Write-Host "ArmorPaint.exe copiado para build\krom."
+
+
+      # ============================================================
+      # 10. MOSTRAR CONTEÚDO DO PACOTE
+      # ============================================================
+
+      - name: Inspect complete package
+        shell: powershell
+        run: |
+
+          $krom = Get-ChildItem `
+              -Path . `
+              -Directory `
+              -Filter "krom" `
+              -Recurse |
+              Where-Object {
+                  Test-Path (Join-Path $_.FullName "krom.js")
+              } |
+              Select-Object -First 1
+
+
+          Write-Host "=========================================="
+          Write-Host "COMPLETE ARMORPAINT PACKAGE"
+          Write-Host "=========================================="
+
+
+          Get-ChildItem `
+              $krom.FullName `
+              -Recurse `
+              -Force |
+              Select-Object FullName, Length
+
+
+          $files = Get-ChildItem `
+              $krom.FullName `
+              -Recurse `
+              -File
+
+
+          $size = (
+              $files |
+              Measure-Object Length -Sum
+          ).Sum
+
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "TOTAL SIZE"
+          Write-Host "=========================================="
+
+
+          Write-Host (
+              "Total: {0:N2} MB" -f ($size / 1MB)
           )
 
 
-          if ($kroms.Count -eq 0) {
+      # ============================================================
+      # 11. CRIAR ARTIFACT
+      # ============================================================
 
-            Write-Error "Nenhuma pasta krom encontrada."
+      - name: Create artifact
+        shell: powershell
+        run: |
 
-            Write-Host ""
-            Write-Host "Pastas build encontradas:"
-
-            Get-ChildItem `
-              -Path $PWD `
+          $krom = Get-ChildItem `
+              -Path . `
               -Directory `
-              -Filter "build" `
+              -Filter "krom" `
+              -Recurse |
+              Where-Object {
+                  Test-Path (Join-Path $_.FullName "krom.js")
+              } |
+              Select-Object -First 1
+
+
+          if (Test-Path ".\artifact") {
+              Remove-Item `
+                  ".\artifact" `
+                  -Recurse `
+                  -Force
+          }
+
+
+          New-Item `
+              -ItemType Directory `
+              -Path ".\artifact" `
+              -Force |
+              Out-Null
+
+
+          Copy-Item `
+              (Join-Path $krom.FullName "*") `
+              ".\artifact\" `
               -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object FullName
+              -Force
+
+
+          Write-Host ""
+          Write-Host "Artifact criado."
+
+
+      # ============================================================
+      # 12. VERIFICAÇÃO FINAL
+      # ============================================================
+
+      - name: Verify final artifact
+        shell: powershell
+        run: |
+
+          Write-Host "=========================================="
+          Write-Host "FINAL ARTIFACT"
+          Write-Host "=========================================="
+
+
+          if (-not (Test-Path ".\artifact\ArmorPaint.exe")) {
+              Write-Error "ArmorPaint.exe não está no artifact."
+              exit 1
+          }
+
+
+          if (-not (Test-Path ".\artifact\krom.js")) {
+              Write-Error "krom.js não está no artifact."
+              exit 1
+          }
+
+
+          $files = Get-ChildItem `
+              ".\artifact" `
+              -Recurse `
+              -File
+
+
+          $size = (
+              $files |
+              Measure-Object Length -Sum
+          ).Sum
+
+
+          Write-Host ""
+          Write-Host "ArmorPaint.exe:"
+          Write-Host (
+              "{0:N2} MB" -f (
+                  (Get-Item ".\artifact\ArmorPaint.exe").Length / 1MB
+              )
+          )
+
+
+          Write-Host ""
+          Write-Host "Package:"
+          Write-Host (
+              "{0:N2} MB" -f ($size / 1MB)
+          )
+
+
+          Write-Host ""
+          Write-Host "Files:"
+          Write-Host $files.Count
+
+
+      # ============================================================
+      # 13. UPLOAD
+      # ============================================================
+
+      - name: Upload ArmorPaint
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArmorPaint-Windows-x64-complete
+          path: artifact
+          compression-level: 0
+          if-no-files-found: error          Select-Object FullName
 
             exit 1
 
