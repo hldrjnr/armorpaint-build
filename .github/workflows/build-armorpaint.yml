@@ -9,403 +9,122 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
       - name: Checkout ArmorPaint
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
-          repository: armory3d/armorpaint
-          ref: main
           submodules: recursive
           fetch-depth: 1
 
+      # ============================================================
+      # 2. Setup (Node.js + Visual Studio)
+      # ============================================================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
+        uses: microsoft/setup-msbuild@v4
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Generate Visual Studio project
-        shell: cmd
-        working-directory: paint
-        run: |
-          call ..\base\make.bat
-          if errorlevel 1 exit /b 1
-
-      - name: Build ArmorPaint
-        shell: cmd
-        working-directory: paint
-        run: |
-          msbuild build\ArmorPaint.sln /m /p:Configuration=Release /p:Platform=x64
-          if errorlevel 1 exit /b 1
-
-      - name: Prepare complete package
-        shell: powershell
-        working-directory: paint
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $build = Join-Path $PWD "build"
-          $krom = Join-Path $build "krom"
-
-          if (-not (Test-Path $build)) {
-            throw "build directory not found"
-          }
-
-          if (-not (Test-Path $krom)) {
-            throw "build\krom directory not found"
-          }
-
-          $exe = Get-ChildItem `
-            -Path $build `
-            -Filter "ArmorPaint.exe" `
-            -Recurse `
-            -File |
-            Where-Object {
-              $_.FullName -notlike "*\krom\ArmorPaint.exe"
-            } |
-            Select-Object -First 1
-
-          if (-not $exe) {
-            throw "Compiled ArmorPaint.exe was not found"
-          }
-
-          Write-Host "Compiled executable:"
-          Write-Host $exe.FullName
-
-          Copy-Item `
-            $exe.FullName `
-            (Join-Path $krom "ArmorPaint.exe") `
-            -Force
-
-          $artifact = Join-Path $PWD "..\artifact"
-
-          if (Test-Path $artifact) {
-            Remove-Item $artifact -Recurse -Force
-          }
-
-          New-Item `
-            $artifact `
-            -ItemType Directory `
-            -Force |
-            Out-Null
-
-          Copy-Item `
-            (Join-Path $krom "*") `
-            $artifact `
-            -Recurse `
-            -Force
-
-          $files = Get-ChildItem `
-            $artifact `
-            -Recurse `
-            -File
-
-          $size = (
-            $files |
-            Measure-Object Length -Sum
-          ).Sum
-
-          Write-Host ""
-          Write-Host "Package size:"
-          Write-Host "$([math]::Round($size / 1MB, 2)) MB"
-
-          if (-not (Test-Path (Join-Path $artifact "ArmorPaint.exe"))) {
-            throw "ArmorPaint.exe missing from artifact"
-          }
-
-      - name: Upload ArmorPaint
-        uses: actions/upload-artifact@v4
-        with:
-          name: ArmorPaint-Windows-x64-complete
-          path: artifact
-          compression-level: 0
-          if-no-files-found: error Write-Host "=========================================="
-          Write-Host "COMPLETE ARMORPAINT PACKAGE"
-          Write-Host "=========================================="
-
-
-          Get-ChildItem `
-              $krom.FullName `
-              -Recurse `
-              -Force |
-              Select-Object FullName, Length
-
-
-          $files = Get-ChildItem `
-              $krom.FullName `
-              -Recurse `
-              -File
-
-
-          $size = (
-              $files |
-              Measure-Object Length -Sum
-          ).Sum
-
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "TOTAL SIZE"
-          Write-Host "=========================================="
-
-
-          Write-Host (
-              "Total: {0:N2} MB" -f ($size / 1MB)
-          )
-
-
       # ============================================================
-      # 11. CRIAR ARTIFACT
+      # 3. Gerar o projeto Visual Studio via Node.js
       # ============================================================
-
-      - name: Create artifact
+      - name: Generate ArmorPaint project
         shell: powershell
         run: |
-
-          $krom = Get-ChildItem `
-              -Path . `
-              -Directory `
-              -Filter "krom" `
-              -Recurse |
-              Where-Object {
-                  Test-Path (Join-Path $_.FullName "krom.js")
-              } |
-              Select-Object -First 1
-
-
-          if (Test-Path ".\artifact") {
-              Remove-Item `
-                  ".\artifact" `
-                  -Recurse `
-                  -Force
-          }
-
-
-          New-Item `
-              -ItemType Directory `
-              -Path ".\artifact" `
-              -Force |
-              Out-Null
-
-
-          Copy-Item `
-              (Join-Path $krom.FullName "*") `
-              ".\artifact\" `
-              -Recurse `
-              -Force
-
-
-          Write-Host ""
-          Write-Host "Artifact criado."
-
-
-      # ============================================================
-      # 12. VERIFICAÇÃO FINAL
-      # ============================================================
-
-      - name: Verify final artifact
-        shell: powershell
-        run: |
-
           Write-Host "=========================================="
-          Write-Host "FINAL ARTIFACT"
+          Write-Host "GENERATING PROJECT VIA NODE.JS"
           Write-Host "=========================================="
 
-
-          if (-not (Test-Path ".\artifact\ArmorPaint.exe")) {
-              Write-Error "ArmorPaint.exe não está no artifact."
+          # O ArmorPaint moderno usa armorcore; versões antigas usam Kinc direto
+          if (Test-Path "armorcore\make.js") {
+              Write-Host "Usando gerador ArmorCore..."
+              node armorcore/make -g direct3d11
+          } elseif (Test-Path "Kinc\make.js") {
+              Write-Host "Usando gerador Kinc..."
+              node Kinc/make -g direct3d11
+          } else {
+              Write-Error "Sistema de build (make.js) não encontrado."
               exit 1
           }
 
-
-          if (-not (Test-Path ".\artifact\krom.js")) {
-              Write-Error "krom.js não está no artifact."
+      # ============================================================
+      # 4. Compilar a Solution
+      # ============================================================
+      - name: Build ArmorPaint Release x64
+        shell: powershell
+        run: |
+          Write-Host "=========================================="
+          Write-Host "BUILDING SOLUTION"
+          Write-Host "=========================================="
+          
+          if (-not (Test-Path "build/ArmorPaint.sln")) {
+              Write-Error "ArmorPaint.sln não foi gerado."
               exit 1
           }
 
-
-          $files = Get-ChildItem `
-              ".\artifact" `
-              -Recurse `
-              -File
-
-
-          $size = (
-              $files |
-              Measure-Object Length -Sum
-          ).Sum
-
-
-          Write-Host ""
-          Write-Host "ArmorPaint.exe:"
-          Write-Host (
-              "{0:N2} MB" -f (
-                  (Get-Item ".\artifact\ArmorPaint.exe").Length / 1MB
-              )
-          )
-
-
-          Write-Host ""
-          Write-Host "Package:"
-          Write-Host (
-              "{0:N2} MB" -f ($size / 1MB)
-          )
-
-
-          Write-Host ""
-          Write-Host "Files:"
-          Write-Host $files.Count
-
+          msbuild build/ArmorPaint.sln /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
       # ============================================================
-      # 13. UPLOAD
+      # 5. Montar pacote completo
       # ============================================================
-
-      - name: Upload ArmorPaint
-        uses: actions/upload-artifact@v4
-        with:
-          name: ArmorPaint-Windows-x64-complete
-          path: artifact
-          compression-level: 0
-          if-no-files-found: error          Select-Object FullName
-
-            exit 1
-
-          }
-
-
-          foreach ($krom in $kroms) {
-
-            Write-Host ""
-            Write-Host "Krom:"
-            Write-Host $krom.FullName
-
-          }
-
-
-      # ============================================================
-      # 9. Montar pacote completo
-      # ============================================================
-
       - name: Create complete package
         shell: powershell
         run: |
-
           Write-Host "=========================================="
-          Write-Host "CREATING COMPLETE PACKAGE"
+          Write-Host "ASSEMBLING ARTIFACT"
           Write-Host "=========================================="
 
+          # Criar pasta do pacote final
+          New-Item -ItemType Directory -Path ".\artifact" -Force | Out-Null
 
-          # ----------------------------------------------------------
-          # Procurar krom
-          # ----------------------------------------------------------
-
-          $krom = Get-ChildItem `
-            -Path $PWD `
-            -Directory `
-            -Filter "krom" `
-            -Recurse |
-            Where-Object {
-              Test-Path (Join-Path $_.FullName "krom.js")
-            } |
-            Select-Object -First 1
-
-
+          # A) Localizar e copiar a pasta Krom (contém krom.js, shaders, dados)
+          $krom = Get-ChildItem -Path ".\build" -Directory -Filter "krom" -Recurse | Select-Object -First 1
           if (-not $krom) {
-
-            Write-Error `
-              "Pasta krom contendo krom.js não encontrada."
-
-            exit 1
-
+              Write-Error "Pasta krom não encontrada."
+              exit 1
           }
+          Write-Host "Copiando arquivos krom..."
+          Copy-Item "$($krom.FullName)\*" ".\artifact\" -Recurse -Force
 
-
-          Write-Host ""
-          Write-Host "Krom selecionado:"
-          Write-Host $krom.FullName
-
-
-          # ----------------------------------------------------------
-          # Procurar executável Release
-          # ----------------------------------------------------------
-
-          $exe = Get-ChildItem `
-            -Path $PWD `
-            -Filter "ArmorPaint.exe" `
-            -Recurse |
-            Where-Object {
-              $_.FullName -notlike "*\krom\ArmorPaint.exe"
-            } |
-            Sort-Object FullName |
-            Select-Object -First 1
-
+          # B) Localizar o executável compilado 
+          # Ignoramos executáveis que já caíram numa pasta krom acidentalmente
+          $exe = Get-ChildItem -Path ".\build" -Filter "ArmorPaint.exe" -Recurse |
+                 Where-Object { $_.Directory.Name -ne "krom" } |
+                 Select-Object -First 1
 
           if (-not $exe) {
-
-            Write-Error "ArmorPaint.exe compilado não encontrado."
-            exit 1
-
+              Write-Error "ArmorPaint.exe não encontrado."
+              exit 1
           }
-
+          Write-Host "Copiando executável: $($exe.FullName)"
+          Copy-Item $exe.FullName ".\artifact\ArmorPaint.exe" -Force
 
           Write-Host ""
-          Write-Host "Executável:"
-          Write-Host $exe.FullName
-
-
-          # ----------------------------------------------------------
-          # Copiar para krom
-          # ----------------------------------------------------------
-
-          Copy-Item `
-            $exe.FullName `
-            (Join-Path $krom.FullName "ArmorPaint.exe") `
-            -Force
-
-
-          # ----------------------------------------------------------
-          # Criar artifact
-          # ----------------------------------------------------------
-
-          if (Test-Path ".\artifact") {
-
-            Remove-Item `
-              ".\artifact" `
-              -Recurse `
-              -Force
-
-          }
-
-
-          New-Item `
-            -ItemType Directory `
-            -Path ".\artifact" `
-            -Force |
-            Out-Null
-
-
-          # ----------------------------------------------------------
-          # Copiar TODO krom
-          # ----------------------------------------------------------
-
-          Copy-Item `
-            (Join-Path $krom.FullName "*") `
-            ".\artifact\" `
-            -Recurse `
-            -Force
-
-
-      # ============================================================
-      # 10. Verificar tamanho
-      # ============================================================
-
-      - name: Verify package
-        shell: powershell
-        run: |
-
           Write-Host "=========================================="
+          Write-Host "FINAL PACKAGE CONTENT"
+          Write-Host "=========================================="
+          Get-ChildItem ".\artifact" | Select-Object Name
+
+      # ============================================================
+      # 6. Upload
+      # ============================================================
+      - name: Upload ArmorPaint
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArmorPaint-Windows-x64-complete
+          path: artifact
+          compression-level: 0
+          if-no-files-found: error
+     Write-Host "=========================================="
           Write-Host "FINAL PACKAGE"
           Write-Host "=========================================="
 
