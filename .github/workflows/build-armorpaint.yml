@@ -1,4 +1,4 @@
-name: ArmorPaint 0.9 Windows x64 D3D11
+name: Download ArmorPaint 0.9 Windows x64 D3D11
 
 on:
   workflow_dispatch:
@@ -8,15 +8,15 @@ permissions:
 
 jobs:
   build:
-    name: ArmorPaint 0.9 / 23.08 / Windows x64 / D3D11
+    name: ArmorPaint 0.9 - Windows x64 - Official Release
     runs-on: windows-2022
 
     steps:
 
       # ============================================================
-      # 1. VERIFICAR A RELEASE/SOURCE OFICIAL
+      # 1. CHECKOUT DO CÓDIGO-FONTE DA RELEASE 23.08
       # ============================================================
-      - name: Checkout ArmorPaint 23.08 source
+      - name: Checkout ArmorPaint 23.08
         uses: actions/checkout@v5
         with:
           repository: armory3d/armorpaint
@@ -25,91 +25,83 @@ jobs:
           submodules: false
 
       # ============================================================
-      # 2. MOSTRAR A REVISÃO
+      # 2. CONSULTAR API DO GITHUB
+      #
+      # Não usamos gh release view.
+      # A API REST pública é mais simples e previsível.
       # ============================================================
-      - name: Verify source revision
+      - name: Get ArmorPaint 23.08 release information
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "ARMORPAINT 0.9 SOURCE"
+          Write-Host "ARMORPAINT 23.08 RELEASE"
           Write-Host "=========================================="
 
-          $commit = git rev-parse HEAD
+          $apiUrl = "https://api.github.com/repos/armory3d/armorpaint/releases/tags/23.08"
+
+          Write-Host ""
+          Write-Host "API:"
+          Write-Host $apiUrl
+
+          $headers = @{
+              "Accept" = "application/vnd.github+json"
+              "User-Agent" = "ArmorPaint-GitHub-Actions"
+          }
+
+          try {
+              $release = Invoke-RestMethod `
+                  -Uri $apiUrl `
+                  -Headers $headers `
+                  -Method Get
+          }
+          catch {
+              throw "Failed to query GitHub release API: $($_.Exception.Message)"
+          }
+
+          if (-not $release) {
+              throw "GitHub returned an empty release response."
+          }
+
+          Write-Host ""
+          Write-Host "Release name:"
+          Write-Host $release.name
+
+          Write-Host ""
+          Write-Host "Tag:"
+          Write-Host $release.tag_name
 
           Write-Host ""
           Write-Host "Commit:"
-          Write-Host $commit
-
-          if ($commit -ne "600d7c7f6f1bcb2b2f6d4d6f16a8b7a4f0f8a7f2") {
-              Write-Warning "Commit differs from the abbreviated release commit shown by GitHub."
-          }
+          Write-Host $release.target_commitish
 
           Write-Host ""
-          Write-Host "Git describe:"
-          git describe --tags --always
+          Write-Host "Published:"
+          Write-Host $release.published_at
 
-      # ============================================================
-      # 3. VERIFICAR GITHUB CLI
-      # ============================================================
-      - name: Verify GitHub CLI
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
+          Write-Host ""
+          Write-Host "Assets:"
 
-          Write-Host "=========================================="
-          Write-Host "VERIFYING GH CLI"
-          Write-Host "=========================================="
-
-          $gh = Get-Command gh.exe -ErrorAction SilentlyContinue
-
-          if (-not $gh) {
-              throw "GitHub CLI (gh) is not installed on the runner."
+          if (-not $release.assets) {
+              throw "Release 23.08 contains no downloadable assets."
           }
 
-          Write-Host "GitHub CLI:"
-          gh --version
-
-      # ============================================================
-      # 4. LISTAR OS ASSETS OFICIAIS DA RELEASE
-      # ============================================================
-      - name: List 23.08 release assets
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "23.08 RELEASE ASSETS"
-          Write-Host "=========================================="
-
-          gh release view 23.08 `
-              --repo armory3d/armorpaint `
-              --json tagName,name,publishedAt,assets `
-              --jq '
-                "Tag: \(.tagName)",
-                "Name: \(.name)",
-                "Published: \(.publishedAt)",
-                "",
-                "Assets:",
-                (.assets[] | " - " + .name)
-              '
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Unable to read ArmorPaint 23.08 release."
+          foreach ($asset in $release.assets) {
+              Write-Host ""
+              Write-Host "Name: $($asset.name)"
+              Write-Host "Size: $($asset.size) bytes"
+              Write-Host "URL:  $($asset.browser_download_url)"
           }
 
       # ============================================================
-      # 5. ENCONTRAR O ASSET WINDOWS
+      # 3. SELECIONAR ASSET WINDOWS
       #
-      # Preferimos ZIP/7Z contendo "Windows" ou "Win".
+      # A release tem poucos assets. Escolhemos o arquivo Windows
+      # através do nome e verificamos que existe antes de continuar.
       # ============================================================
       - name: Select Windows release asset
         shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -117,69 +109,70 @@ jobs:
           Write-Host "SELECTING WINDOWS ASSET"
           Write-Host "=========================================="
 
-          $json = gh release view 23.08 `
-              --repo armory3d/armorpaint `
-              --json assets
+          $apiUrl = "https://api.github.com/repos/armory3d/armorpaint/releases/tags/23.08"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "Failed to query release assets."
+          $headers = @{
+              "Accept" = "application/vnd.github+json"
+              "User-Agent" = "ArmorPaint-GitHub-Actions"
           }
 
-          $release = $json | ConvertFrom-Json
+          $release = Invoke-RestMethod `
+              -Uri $apiUrl `
+              -Headers $headers `
+              -Method Get
 
-          $assets = @(
+          $archives = @(
               $release.assets |
               Where-Object {
-                  $_.name -match '(?i)(windows|win)' -and
                   $_.name -match '(?i)\.(zip|7z)$'
               }
           )
 
-          if ($assets.Count -eq 0) {
-
-              Write-Host ""
-              Write-Host "No asset explicitly containing Windows/Win was found."
-
-              Write-Host ""
-              Write-Host "Available archive assets:"
-
-              $assets = @(
-                  $release.assets |
-                  Where-Object {
-                      $_.name -match '(?i)\.(zip|7z)$'
-                  }
-              )
+          if ($archives.Count -eq 0) {
+              throw "No ZIP or 7Z release asset exists in ArmorPaint 23.08."
           }
 
-          if ($assets.Count -eq 0) {
-              throw "No downloadable archive asset was found in release 23.08."
+          Write-Host ""
+          Write-Host "Available archives:"
+
+          foreach ($asset in $archives) {
+              Write-Host " - $($asset.name)"
           }
 
-          if ($assets.Count -gt 1) {
-
-              Write-Host ""
-              Write-Host "Candidate archives:"
-
-              foreach ($asset in $assets) {
-                  Write-Host "$($asset.name) [$($asset.size) bytes]"
+          # Primeiro procurar nomes explicitamente relacionados com Windows.
+          $windowsAssets = @(
+              $archives |
+              Where-Object {
+                  $_.name -match '(?i)(windows|win64|win-x64|win_x64)'
               }
+          )
 
-              # Prefer explicit Windows naming.
-              $windows = $assets |
-                  Where-Object {
-                      $_.name -match '(?i)(windows|win)'
-                  } |
-                  Select-Object -First 1
+          if ($windowsAssets.Count -gt 1) {
+              throw "Multiple Windows assets were found. Refusing to guess."
+          }
 
-              if ($windows) {
-                  $selected = $windows
-              }
-              else {
-                  $selected = $assets | Select-Object -First 1
-              }
+          if ($windowsAssets.Count -eq 1) {
+              $selected = $windowsAssets[0]
           }
           else {
-              $selected = $assets[0]
+              # Se a release só tiver um arquivo binário além do source,
+              # usamos a informação estrutural para evitar adivinhar.
+              if ($archives.Count -eq 1) {
+                  $selected = $archives[0]
+              }
+              else {
+                  Write-Host ""
+                  Write-Host "Could not uniquely identify the Windows asset."
+
+                  foreach ($asset in $archives) {
+                      Write-Host ""
+                      Write-Host "Candidate:"
+                      Write-Host $asset.name
+                      Write-Host $asset.browser_download_url
+                  }
+
+                  throw "Unable to uniquely identify ArmorPaint Windows 23.08 asset."
+              }
           }
 
           Write-Host ""
@@ -187,27 +180,31 @@ jobs:
           Write-Host $selected.name
 
           Write-Host ""
+          Write-Host "Size:"
+          Write-Host "$($selected.size) bytes"
+
+          Write-Host ""
           Write-Host "Download URL:"
-          Write-Host $selected.url
+          Write-Host $selected.browser_download_url
 
-          "RELEASE_ASSET=$($selected.name)" >> $env:GITHUB_ENV
+          "RELEASE_ASSET_NAME=$($selected.name)" >> $env:GITHUB_ENV
+          "RELEASE_ASSET_URL=$($selected.browser_download_url)" >> $env:GITHUB_ENV
+          "RELEASE_ASSET_SIZE=$($selected.size)" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 6. DOWNLOAD DO ASSET OFICIAL
+      # 4. BAIXAR ASSET
       # ============================================================
-      - name: Download official ArmorPaint 23.08
+      - name: Download official Windows asset
         shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "DOWNLOADING OFFICIAL ARMORPAINT 23.08"
+          Write-Host "DOWNLOADING OFFICIAL ARMORPAINT"
           Write-Host "=========================================="
 
-          if (-not $env:RELEASE_ASSET) {
-              throw "RELEASE_ASSET is not set."
+          if (-not $env:RELEASE_ASSET_URL) {
+              throw "RELEASE_ASSET_URL is not set."
           }
 
           $downloadDir = Join-Path `
@@ -227,41 +224,39 @@ jobs:
               -Force |
               Out-Null
 
-          Push-Location $downloadDir
-
-          try {
-
-              gh release download 23.08 `
-                  --repo armory3d/armorpaint `
-                  --pattern $env:RELEASE_ASSET `
-                  --clobber
-
-              if ($LASTEXITCODE -ne 0) {
-                  throw "Failed to download official ArmorPaint release asset."
-              }
-
-          }
-          finally {
-              Pop-Location
-          }
-
-          $downloaded = Get-ChildItem `
+          $filePath = Join-Path `
               $downloadDir `
-              -File
-
-          if (-not $downloaded) {
-              throw "No release file was downloaded."
-          }
+              $env:RELEASE_ASSET_NAME
 
           Write-Host ""
-          Write-Host "Downloaded file:"
+          Write-Host "Downloading:"
+          Write-Host $env:RELEASE_ASSET_URL
 
-          foreach ($file in $downloaded) {
-              Write-Host "$($file.FullName) [$($file.Length) bytes]"
+          Invoke-WebRequest `
+              -Uri $env:RELEASE_ASSET_URL `
+              -OutFile $filePath `
+              -UseBasicParsing
+
+          if (-not (Test-Path $filePath)) {
+              throw "Release asset was not downloaded."
+          }
+
+          $file = Get-Item $filePath
+
+          Write-Host ""
+          Write-Host "Downloaded:"
+          Write-Host $file.FullName
+
+          Write-Host ""
+          Write-Host "Downloaded size:"
+          Write-Host "$($file.Length) bytes"
+
+          if ($file.Length -ne [int64]$env:RELEASE_ASSET_SIZE) {
+              throw "Downloaded file size differs from GitHub release metadata."
           }
 
       # ============================================================
-      # 7. LOCALIZAR 7-ZIP
+      # 5. 7-ZIP
       # ============================================================
       - name: Locate 7-Zip
         shell: powershell
@@ -272,48 +267,40 @@ jobs:
           Write-Host "LOCATING 7-ZIP"
           Write-Host "=========================================="
 
-          $candidatePaths = @(
+          $candidates = @(
               "${env:ProgramFiles}\7-Zip\7z.exe",
               "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
           )
 
           $sevenZip = $null
 
-          foreach ($path in $candidatePaths) {
-              if (Test-Path $path) {
-                  $sevenZip = $path
+          foreach ($candidate in $candidates) {
+              if (Test-Path $candidate) {
+                  $sevenZip = $candidate
                   break
               }
           }
 
           if (-not $sevenZip) {
-
-              $command = Get-Command 7z.exe -ErrorAction SilentlyContinue
-
-              if ($command) {
-                  $sevenZip = $command.Source
-              }
+              throw "7-Zip is not installed on this runner."
           }
 
-          if (-not $sevenZip) {
-              throw "7-Zip was not found."
-          }
-
+          Write-Host ""
           Write-Host "7-Zip:"
           Write-Host $sevenZip
 
           "SEVEN_ZIP=$sevenZip" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 8. EXTRAIR RELEASE
+      # 6. EXTRAIR
       # ============================================================
-      - name: Extract official release
+      - name: Extract official ArmorPaint package
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "EXTRACTING OFFICIAL RELEASE"
+          Write-Host "EXTRACTING ARMORPAINT"
           Write-Host "=========================================="
 
           $downloadDir = Join-Path `
@@ -337,25 +324,28 @@ jobs:
               -Force |
               Out-Null
 
-          $archive = Get-ChildItem `
+          $archive = Join-Path `
               $downloadDir `
-              -File |
-              Select-Object -First 1
+              $env:RELEASE_ASSET_NAME
 
-          if (-not $archive) {
-              throw "Downloaded release archive not found."
+          if (-not (Test-Path $archive)) {
+              throw "Downloaded archive not found: $archive"
           }
+
+          $extension = [IO.Path]::GetExtension($archive).ToLowerInvariant()
 
           Write-Host ""
           Write-Host "Archive:"
-          Write-Host $archive.FullName
+          Write-Host $archive
 
-          $extension = $archive.Extension.ToLowerInvariant()
+          Write-Host ""
+          Write-Host "Extension:"
+          Write-Host $extension
 
           if ($extension -eq ".zip") {
 
               Expand-Archive `
-                  -Path $archive.FullName `
+                  -Path $archive `
                   -DestinationPath $extractDir `
                   -Force
 
@@ -364,34 +354,25 @@ jobs:
 
               & $env:SEVEN_ZIP `
                   x `
-                  $archive.FullName `
+                  $archive `
                   "-o$extractDir" `
                   "-y" `
                   "-aoa"
 
               if ($LASTEXITCODE -ne 0) {
-                  throw "7-Zip failed to extract the ArmorPaint release."
+                  throw "7-Zip failed to extract the release archive."
               }
 
           }
           else {
-              throw "Unsupported release archive format: $extension"
+              throw "Unsupported archive format: $extension"
           }
 
           Write-Host ""
           Write-Host "Extraction completed."
 
-          Write-Host ""
-          Write-Host "Extracted files:"
-
-          Get-ChildItem `
-              $extractDir `
-              -Recurse `
-              -File |
-              Select-Object FullName, Length
-
       # ============================================================
-      # 9. LOCALIZAR ARMORPAINT.EXE
+      # 7. LOCALIZAR ARMORPAINT.EXE
       # ============================================================
       - name: Locate ArmorPaint executable
         shell: powershell
@@ -406,93 +387,60 @@ jobs:
               $env:GITHUB_WORKSPACE `
               "release_extract"
 
-          $executables = Get-ChildItem `
-              $extractDir `
-              -Filter "ArmorPaint.exe" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue
+          $executables = @(
+              Get-ChildItem `
+                  -Path $extractDir `
+                  -Filter "ArmorPaint.exe" `
+                  -File `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue
+          )
 
-          if (-not $executables) {
+          if ($executables.Count -eq 0) {
+
               Write-Host ""
-              Write-Host "Available executables:"
+              Write-Host "Executable files found:"
 
               Get-ChildItem `
-                  $extractDir `
-                  -Include "*.exe" `
+                  -Path $extractDir `
+                  -Filter "*.exe" `
+                  -File `
                   -Recurse `
-                  -File |
-                  Select-Object FullName, Length
+                  -ErrorAction SilentlyContinue |
+                  ForEach-Object {
+                      Write-Host "$($_.FullName) [$($_.Length) bytes]"
+                  }
 
-              throw "ArmorPaint.exe was not found in the official release archive."
+              throw "ArmorPaint.exe was not found in the official release."
           }
 
-          Write-Host ""
-          Write-Host "Found executable(s):"
+          if ($executables.Count -gt 1) {
+              Write-Host ""
+              Write-Host "Multiple ArmorPaint.exe files found:"
 
-          foreach ($exe in $executables) {
-              Write-Host "$($exe.FullName) [$($exe.Length) bytes]"
+              foreach ($exe in $executables) {
+                  Write-Host $exe.FullName
+              }
+
+              throw "Multiple ArmorPaint.exe files found."
           }
 
-          $selected = $executables |
-              Select-Object -First 1
+          $selected = $executables[0]
 
           Write-Host ""
-          Write-Host "Selected:"
+          Write-Host "ArmorPaint.exe:"
           Write-Host $selected.FullName
+
+          Write-Host ""
+          Write-Host "Size:"
+          Write-Host "$($selected.Length) bytes"
 
           "OFFICIAL_EXE=$($selected.FullName)" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 10. VERIFICAR ESTRUTURA PORTÁTIL
-      # ============================================================
-      - name: Verify official package structure
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "VERIFYING OFFICIAL PACKAGE"
-          Write-Host "=========================================="
-
-          $exe = Get-Item $env:OFFICIAL_EXE
-
-          Write-Host ""
-          Write-Host "ArmorPaint.exe:"
-          Write-Host $exe.FullName
-
-          Write-Host ""
-          Write-Host "Size:"
-          Write-Host "$($exe.Length) bytes"
-
-          if ($exe.Length -lt 1000000) {
-              throw "ArmorPaint.exe is suspiciously small."
-          }
-
-          $root = $exe.Directory.FullName
-
-          Write-Host ""
-          Write-Host "Package root:"
-          Write-Host $root
-
-          $files = Get-ChildItem `
-              $root `
-              -Recurse `
-              -File
-
-          if (-not $files) {
-              throw "The extracted package contains no files."
-          }
-
-          Write-Host ""
-          Write-Host "Total files:"
-          Write-Host $files.Count
-
-      # ============================================================
-      # 11. CRIAR PACOTE FINAL
+      # 8. CRIAR PACOTE FINAL
       #
-      # Copiamos exatamente o diretório que contém o executável
-      # oficial e todo o seu runtime.
+      # Copiar literalmente toda a pasta que contém o executável.
       # ============================================================
       - name: Create portable package
         shell: powershell
@@ -522,6 +470,14 @@ jobs:
               -Force |
               Out-Null
 
+          Write-Host ""
+          Write-Host "Source:"
+          Write-Host $sourceRoot
+
+          Write-Host ""
+          Write-Host "Destination:"
+          Write-Host $artifact
+
           Copy-Item `
               -Path (Join-Path $sourceRoot "*") `
               -Destination $artifact `
@@ -533,35 +489,23 @@ jobs:
               "ArmorPaint.exe"
 
           if (-not (Test-Path $finalExe)) {
-              throw "ArmorPaint.exe is missing from the final package."
+              throw "ArmorPaint.exe is missing from final package."
           }
 
           Write-Host ""
-          Write-Host "Final ArmorPaint.exe:"
+          Write-Host "Final executable:"
           Write-Host $finalExe
 
-          Write-Host ""
-          Write-Host "Final package contents:"
-
-          Get-ChildItem `
-              $artifact `
-              -Recurse `
-              -File |
-              ForEach-Object {
-                  $relative = $_.FullName.Substring($artifact.Length).TrimStart("\")
-                  Write-Host "$relative [$($_.Length) bytes]"
-              }
-
       # ============================================================
-      # 12. CRIAR ZIP FINAL
+      # 9. ZIP
       # ============================================================
-      - name: Create final ZIP
+      - name: Create ZIP
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "CREATING FINAL ZIP"
+          Write-Host "CREATING ZIP"
           Write-Host "=========================================="
 
           $artifact = Join-Path `
@@ -570,7 +514,7 @@ jobs:
 
           $zip = Join-Path `
               $env:GITHUB_WORKSPACE `
-              "ArmorPaint-0.9-23.08-Windows-x64-D3D11.zip"
+              "ArmorPaint-0.9-23.08-Windows-x64.zip"
 
           if (Test-Path $zip) {
               Remove-Item `
@@ -584,7 +528,7 @@ jobs:
               -CompressionLevel Optimal
 
           if (-not (Test-Path $zip)) {
-              throw "Final ZIP was not created."
+              throw "ZIP was not created."
           }
 
           $info = Get-Item $zip
@@ -598,9 +542,9 @@ jobs:
           Write-Host "$($info.Length) bytes"
 
       # ============================================================
-      # 13. UPLOAD DO PACOTE
+      # 10. UPLOAD
       # ============================================================
-      - name: Upload ArmorPaint 0.9 D3D11
+      - name: Upload ArmorPaint 0.9 Windows x64
         uses: actions/upload-artifact@v5
         with:
           name: ArmorPaint-0.9-23.08-Windows-x64-D3D11
@@ -609,12 +553,12 @@ jobs:
           compression-level: 0
 
       # ============================================================
-      # 14. UPLOAD DO ZIP
+      # 11. UPLOAD ZIP
       # ============================================================
-      - name: Upload ArmorPaint 0.9 D3D11 ZIP
+      - name: Upload ArmorPaint 0.9 Windows x64 ZIP
         uses: actions/upload-artifact@v5
         with:
           name: ArmorPaint-0.9-23.08-Windows-x64-D3D11-ZIP
-          path: ArmorPaint-0.9-23.08-Windows-x64-D3D11.zip
+          path: ArmorPaint-0.9-23.08-Windows-x64.zip
           if-no-files-found: error
           compression-level: 0
