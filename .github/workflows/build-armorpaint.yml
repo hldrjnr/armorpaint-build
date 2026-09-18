@@ -18,11 +18,9 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. ARMORPAINT 0.9 / 23.08
+      # 1. CHECKOUT ARMORPAINT 0.9
       #
-      # NÃO usamos submodules: recursive.
-      # A árvore antiga referencia repositórios históricos que já
-      # não estão disponíveis nos URLs originais.
+      # 0.9-armorpaint = tag 23.08
       # ============================================================
       - name: Checkout ArmorPaint 23.08
         uses: actions/checkout@v5
@@ -35,7 +33,7 @@ jobs:
       # ============================================================
       # 2. NODE.JS
       # ============================================================
-      - name: Setup Node.js 20
+      - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: "20"
@@ -48,70 +46,15 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       # ============================================================
-      # 4. MSVC
+      # 4. MSVC X64
       # ============================================================
-      - name: Setup MSVC x64
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
       # ============================================================
-      # 5. 7-ZIP
-      # ============================================================
-      - name: Ensure 7-Zip
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "CHECKING 7-ZIP"
-          Write-Host "=========================================="
-
-          $paths = @(
-              "${env:ProgramFiles}\7-Zip\7z.exe",
-              "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
-          )
-
-          $sevenZip = $null
-
-          foreach ($path in $paths) {
-              if (Test-Path $path) {
-                  $sevenZip = $path
-                  break
-              }
-          }
-
-          if (-not $sevenZip) {
-              $cmd = Get-Command 7z.exe -ErrorAction SilentlyContinue
-
-              if ($cmd) {
-                  $sevenZip = $cmd.Source
-              }
-          }
-
-          if (-not $sevenZip) {
-              Write-Host "7-Zip not found. Installing..."
-              choco install 7zip -y --no-progress
-
-              foreach ($path in $paths) {
-                  if (Test-Path $path) {
-                      $sevenZip = $path
-                      break
-                  }
-              }
-          }
-
-          if (-not $sevenZip) {
-              throw "7-Zip could not be located."
-          }
-
-          Write-Host "Using:"
-          Write-Host $sevenZip
-
-          "SEVEN_ZIP=$sevenZip" >> $env:GITHUB_ENV
-
-      # ============================================================
-      # 6. VERIFICAR AMBIENTE
+      # 5. VERIFICAR FERRAMENTAS BASE
       # ============================================================
       - name: Verify build environment
         shell: powershell
@@ -139,12 +82,32 @@ jobs:
           msbuild.exe -version
 
           Write-Host ""
-          Write-Host "ArmorPaint commit:"
+          Write-Host "Workspace:"
+          Write-Host $env:GITHUB_WORKSPACE
+
+      # ============================================================
+      # 6. VERIFICAR ARMORPAINT
+      # ============================================================
+      - name: Verify ArmorPaint revision
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=========================================="
+          Write-Host "ARMORPAINT REVISION"
+          Write-Host "=========================================="
+
+          Write-Host ""
+          Write-Host "Commit:"
           git rev-parse HEAD
 
           Write-Host ""
-          Write-Host "ArmorPaint tag:"
+          Write-Host "Tag:"
           git describe --tags --always
+
+          Write-Host ""
+          Write-Host "ArmorCore gitlink:"
+          git ls-tree HEAD armorcore
 
       # ============================================================
       # 7. OBTER SHA DO ARMORCORE
@@ -161,7 +124,7 @@ jobs:
           $entry = git ls-tree HEAD armorcore
 
           if (-not $entry) {
-              throw "ArmorCore gitlink not found in ArmorPaint 23.08."
+              throw "ArmorCore gitlink was not found."
           }
 
           $sha = $entry.Split("`t")[0].Split(" ")[2]
@@ -177,91 +140,124 @@ jobs:
           "ARMORCORE_SHA=$sha" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 8. CHECKOUT ARMORCORE EXATO
+      # 8. DOWNLOAD ARMORCORE EXATO
       # ============================================================
-      - name: Checkout exact ArmorCore
+      - name: Download ArmorCore exact revision
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "CHECKING OUT ARMORCORE"
+          Write-Host "DOWNLOADING ARMORCORE"
           Write-Host "=========================================="
 
-          $path = Join-Path `
+          $destination = Join-Path `
               $env:GITHUB_WORKSPACE `
               "armorcore"
 
-          git clone `
-              --filter=blob:none `
-              --no-checkout `
-              https://github.com/armory3d/armorcore.git `
-              $path
+          $archive = Join-Path `
+              $env:RUNNER_TEMP `
+              "armorcore.zip"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "ArmorCore clone failed."
+          $extract = Join-Path `
+              $env:RUNNER_TEMP `
+              "armorcore_extract"
+
+          $url = "https://github.com/armory3d/armorcore/archive/$env:ARMORCORE_SHA.zip"
+
+          if (Test-Path $destination) {
+              Remove-Item $destination -Recurse -Force
           }
 
-          Push-Location $path
-
-          try {
-              git checkout $env:ARMORCORE_SHA
-
-              if ($LASTEXITCODE -ne 0) {
-                  throw "ArmorCore checkout failed."
-              }
+          if (Test-Path $archive) {
+              Remove-Item $archive -Force
           }
-          finally {
-              Pop-Location
+
+          if (Test-Path $extract) {
+              Remove-Item $extract -Recurse -Force
           }
 
           Write-Host ""
-          Write-Host "ArmorCore revision:"
-          git -C $path rev-parse HEAD
+          Write-Host "URL:"
+          Write-Host $url
+
+          Invoke-WebRequest `
+              -Uri $url `
+              -OutFile $archive `
+              -UseBasicParsing
+
+          if (-not (Test-Path $archive)) {
+              throw "ArmorCore archive was not downloaded."
+          }
+
+          New-Item `
+              -ItemType Directory `
+              -Path $extract `
+              -Force |
+              Out-Null
+
+          Expand-Archive `
+              -Path $archive `
+              -DestinationPath $extract `
+              -Force
+
+          $root = Get-ChildItem `
+              $extract `
+              -Directory |
+              Select-Object -First 1
+
+          if (-not $root) {
+              throw "ArmorCore archive extraction failed."
+          }
+
+          New-Item `
+              -ItemType Directory `
+              -Path $destination `
+              -Force |
+              Out-Null
+
+          Copy-Item `
+              -Path (Join-Path $root.FullName "*") `
+              -Destination $destination `
+              -Recurse `
+              -Force
+
+          Write-Host ""
+          Write-Host "ArmorCore installed at:"
+          Write-Host $destination
 
       # ============================================================
-      # 9. OBTER SHA DO KINC
+      # 9. DEFINIR KINC HISTÓRICO
+      #
+      # O ArmorCore 0.9 referencia este commit:
+      #
+      # 60e0062139e027a59774155bdb03731beac579e7
+      #
+      # Esse histórico está atualmente no Kode/Kore.
       # ============================================================
-      - name: Determine exact Kinc revision
+      - name: Set historical Kinc revision
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          Write-Host "=========================================="
-          Write-Host "KINC REVISION"
-          Write-Host "=========================================="
+          $kincSha = (
+              git -C "$env:GITHUB_WORKSPACE\armorcore" `
+                  ls-tree HEAD Kinc
+          ).Split("`t")[0].Split(" ")[2]
 
-          $armorcore = Join-Path `
-              $env:GITHUB_WORKSPACE `
-              "armorcore"
-
-          $entry = git -C $armorcore ls-tree HEAD Kinc
-
-          if (-not $entry) {
-              throw "Kinc gitlink not found in ArmorCore."
+          if (-not $kincSha) {
+              throw "Could not determine Kinc revision from ArmorCore."
           }
 
-          $sha = $entry.Split("`t")[0].Split(" ")[2]
-
-          if (-not $sha) {
-              throw "Could not determine Kinc SHA."
-          }
-
-          Write-Host ""
           Write-Host "Kinc SHA:"
-          Write-Host $sha
+          Write-Host $kincSha
 
-          "KINC_SHA=$sha" >> $env:GITHUB_ENV
+          "KINC_SHA=$kincSha" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 10. BAIXAR KINC HISTÓRICO
-      #
-      # O commit histórico está atualmente no repositório
-      # Kode/Kore.
-      #
-      # Usamos o SHA EXATO em vez de main.
+      # 10. DOWNLOAD KINC/KORE HISTÓRICO
       # ============================================================
-      - name: Download exact historical Kinc
+      - name: Download historical Kinc
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -274,50 +270,42 @@ jobs:
               $env:GITHUB_WORKSPACE `
               "armorcore\Kinc"
 
-          $zip = Join-Path `
+          $archive = Join-Path `
               $env:RUNNER_TEMP `
-              "Kinc.zip"
+              "kinc.zip"
 
           $extract = Join-Path `
               $env:RUNNER_TEMP `
-              "KincExtract"
+              "kinc_extract"
 
           $url = "https://github.com/Kode/Kore/archive/$env:KINC_SHA.zip"
 
-          Write-Host ""
-          Write-Host "Kinc commit:"
-          Write-Host $env:KINC_SHA
-
-          Write-Host ""
-          Write-Host "Download:"
-          Write-Host $url
-
           if (Test-Path $destination) {
-              Remove-Item `
-                  $destination `
-                  -Recurse `
-                  -Force
+              Remove-Item $destination -Recurse -Force
           }
 
-          if (Test-Path $zip) {
-              Remove-Item `
-                  $zip `
-                  -Force
+          if (Test-Path $archive) {
+              Remove-Item $archive -Force
           }
 
           if (Test-Path $extract) {
-              Remove-Item `
-                  $extract `
-                  -Recurse `
-                  -Force
+              Remove-Item $extract -Recurse -Force
           }
+
+          Write-Host ""
+          Write-Host "Kinc SHA:"
+          Write-Host $env:KINC_SHA
+
+          Write-Host ""
+          Write-Host "URL:"
+          Write-Host $url
 
           Invoke-WebRequest `
               -Uri $url `
-              -OutFile $zip `
+              -OutFile $archive `
               -UseBasicParsing
 
-          if (-not (Test-Path $zip)) {
+          if (-not (Test-Path $archive)) {
               throw "Kinc archive was not downloaded."
           }
 
@@ -328,7 +316,7 @@ jobs:
               Out-Null
 
           Expand-Archive `
-              -Path $zip `
+              -Path $archive `
               -DestinationPath $extract `
               -Force
 
@@ -338,7 +326,7 @@ jobs:
               Select-Object -First 1
 
           if (-not $root) {
-              throw "Kinc archive extraction failed."
+              throw "Kinc extraction failed."
           }
 
           New-Item `
@@ -354,318 +342,156 @@ jobs:
               -Force
 
           Write-Host ""
-          Write-Host "Kinc installed at:"
+          Write-Host "Kinc installed:"
           Write-Host $destination
 
       # ============================================================
-      # 11. OBTER SHA DO KINC TOOLS WINDOWS
-      # ============================================================
-      - name: Determine Kinc Windows tools revision
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "KINC WINDOWS TOOLS REVISION"
-          Write-Host "=========================================="
-
-          $kinc = Join-Path `
-              $env:GITHUB_WORKSPACE `
-              "armorcore\Kinc"
-
-          $entry = git -C $kinc ls-tree HEAD Tools/windows_x64
-
-          if (-not $entry) {
-              throw "Kinc Tools/windows_x64 gitlink was not found."
-          }
-
-          $sha = $entry.Split("`t")[0].Split(" ")[2]
-
-          if (-not $sha) {
-              throw "Could not determine KincTools Windows SHA."
-          }
-
-          Write-Host ""
-          Write-Host "KincTools Windows SHA:"
-          Write-Host $sha
-
-          "KINC_TOOLS_SHA=$sha" >> $env:GITHUB_ENV
-
-      # ============================================================
-      # 12. RESOLVER REPOSITÓRIO KINC TOOLS
+      # 11. BAIXAR KINC TOOLS
       #
-      # Usamos a API para obter a branch atual.
-      # Não assumimos que seja "main".
+      # NÃO usamos submodule.
       #
-      # A existência do repositório é verificada antes de baixar.
-      # ============================================================
-      - name: Resolve KincTools repository
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "RESOLVING KINC TOOLS REPOSITORY"
-          Write-Host "=========================================="
-
-          $repoApi = "https://api.github.com/repos/armory3d/KincTools_windows_x64"
-
-          $headers = @{
-              "Accept" = "application/vnd.github+json"
-              "User-Agent" = "ArmorPaint-Build"
-          }
-
-          try {
-              $repo = Invoke-RestMethod `
-                  -Uri $repoApi `
-                  -Headers $headers `
-                  -Method Get
-          }
-          catch {
-              throw "KincTools_windows_x64 repository is not accessible: $($_.Exception.Message)"
-          }
-
-          if (-not $repo.default_branch) {
-              throw "KincTools repository has no default branch."
-          }
-
-          Write-Host ""
-          Write-Host "Repository:"
-          Write-Host $repo.full_name
-
-          Write-Host ""
-          Write-Host "Default branch:"
-          Write-Host $repo.default_branch
-
-          "KINC_TOOLS_DEFAULT_BRANCH=$($repo.default_branch)" >> $env:GITHUB_ENV
-
-      # ============================================================
-      # 13. VERIFICAR SE O SHA EXATO EXISTE
-      # ============================================================
-      - name: Verify KincTools exact revision
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "VERIFYING KINC TOOLS COMMIT"
-          Write-Host "=========================================="
-
-          $url = "https://api.github.com/repos/armory3d/KincTools_windows_x64/commits/$env:KINC_TOOLS_SHA"
-
-          $headers = @{
-              "Accept" = "application/vnd.github+json"
-              "User-Agent" = "ArmorPaint-Build"
-          }
-
-          try {
-              $commit = Invoke-RestMethod `
-                  -Uri $url `
-                  -Headers $headers `
-                  -Method Get
-          }
-          catch {
-              throw "The exact KincTools commit $env:KINC_TOOLS_SHA is not accessible."
-          }
-
-          Write-Host ""
-          Write-Host "Requested:"
-          Write-Host $env:KINC_TOOLS_SHA
-
-          Write-Host ""
-          Write-Host "Resolved:"
-          Write-Host $commit.sha
-
-          if ($commit.sha -ne $env:KINC_TOOLS_SHA) {
-              throw "KincTools SHA mismatch."
-          }
-
-      # ============================================================
-      # 14. BAIXAR KINC TOOLS NO COMMIT EXATO
+      # O repositório antigo:
+      #   armory3d/KincTools_windows_x64
       #
-      # ZIP via GitHub API.
-      # Nenhum git clone.
+      # deixou de estar acessível pela URL histórica.
+      #
+      # O sucessor atual:
+      #   Kode/KoreTools_windows_x64
+      #
+      # contém:
+      #   kmake.exe
+      #   kraffiti.exe
+      #   krafix.exe
+      #   D3DCompiler_47.dll
+      #   dxcompiler.dll
+      #   dxil.dll
+      #
+      # O Kinc histórico procura esses executáveis em
+      # Tools/windows_x64.
       # ============================================================
-      - name: Download exact KincTools Windows
+      - name: Download Kinc Windows tools
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "DOWNLOADING EXACT KINC TOOLS"
-          Write-Host "=========================================="
-
-          $destination = Join-Path `
-              $env:GITHUB_WORKSPACE `
-              "armorcore\Kinc\Tools\windows_x64"
-
-          $zip = Join-Path `
-              $env:RUNNER_TEMP `
-              "KincTools.zip"
-
-          $extract = Join-Path `
-              $env:RUNNER_TEMP `
-              "KincToolsExtract"
-
-          $url = "https://github.com/armory3d/KincTools_windows_x64/archive/$env:KINC_TOOLS_SHA.zip"
-
-          Write-Host ""
-          Write-Host "Commit:"
-          Write-Host $env:KINC_TOOLS_SHA
-
-          Write-Host ""
-          Write-Host "URL:"
-          Write-Host $url
-
-          if (Test-Path $destination) {
-              Remove-Item `
-                  $destination `
-                  -Recurse `
-                  -Force
-          }
-
-          if (Test-Path $zip) {
-              Remove-Item `
-                  $zip `
-                  -Force
-          }
-
-          if (Test-Path $extract) {
-              Remove-Item `
-                  $extract `
-                  -Recurse `
-                  -Force
-          }
-
-          Invoke-WebRequest `
-              -Uri $url `
-              -OutFile $zip `
-              -UseBasicParsing
-
-          if (-not (Test-Path $zip)) {
-              throw "KincTools ZIP was not downloaded."
-          }
-
-          New-Item `
-              -ItemType Directory `
-              -Path $extract `
-              -Force |
-              Out-Null
-
-          Expand-Archive `
-              -Path $zip `
-              -DestinationPath $extract `
-              -Force
-
-          $root = Get-ChildItem `
-              $extract `
-              -Directory |
-              Select-Object -First 1
-
-          if (-not $root) {
-              throw "KincTools archive extraction failed."
-          }
-
-          New-Item `
-              -ItemType Directory `
-              -Path $destination `
-              -Force |
-              Out-Null
-
-          Copy-Item `
-              -Path (Join-Path $root.FullName "*") `
-              -Destination $destination `
-              -Recurse `
-              -Force
-
-          Write-Host ""
-          Write-Host "KincTools installed:"
-          Write-Host $destination
-
-      # ============================================================
-      # 15. VERIFICAR KINC TOOLS
-      # ============================================================
-      - name: Verify KincTools binaries
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "VERIFYING KINC TOOLS"
+          Write-Host "DOWNLOADING KINC WINDOWS TOOLS"
           Write-Host "=========================================="
 
           $tools = Join-Path `
               $env:GITHUB_WORKSPACE `
               "armorcore\Kinc\Tools\windows_x64"
 
-          if (-not (Test-Path $tools)) {
-              throw "KincTools directory does not exist."
+          if (Test-Path $tools) {
+              Remove-Item `
+                  $tools `
+                  -Recurse `
+                  -Force
           }
 
-          $files = Get-ChildItem `
-              $tools `
-              -Recurse `
-              -File
+          New-Item `
+              -ItemType Directory `
+              -Path $tools `
+              -Force |
+              Out-Null
 
-          if (-not $files) {
-              throw "KincTools directory is empty."
-          }
+          $baseUrl = "https://github.com/Kode/KoreTools_windows_x64/raw/refs/heads/main"
 
-          Write-Host ""
-          Write-Host "KincTools files:"
+          $files = @(
+              "kmake.exe",
+              "kraffiti.exe",
+              "krafix.exe",
+              "D3DCompiler_47.dll",
+              "dxcompiler.dll",
+              "dxil.dll"
+          )
 
           foreach ($file in $files) {
-              Write-Host "$($file.FullName) [$($file.Length) bytes]"
+
+              $url = "$baseUrl/$file"
+
+              $destination = Join-Path `
+                  $tools `
+                  $file
+
+              Write-Host ""
+              Write-Host "Downloading:"
+              Write-Host $file
+
+              Write-Host "URL:"
+              Write-Host $url
+
+              Invoke-WebRequest `
+                  -Uri $url `
+                  -OutFile $destination `
+                  -UseBasicParsing
+
+              if (-not (Test-Path $destination)) {
+                  throw "Failed to download $file."
+              }
+
+              $info = Get-Item $destination
+
+              if ($info.Length -eq 0) {
+                  throw "$file is empty."
+              }
+
+              Write-Host "Downloaded: $($info.Length) bytes"
           }
 
-          $kmake = Get-ChildItem `
-              $tools `
-              -Filter "kmake.exe" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
+      # ============================================================
+      # 12. VALIDAR KINC TOOLS
+      # ============================================================
+      - name: Verify Kinc Windows tools
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
 
-          if (-not $kmake) {
-              throw "kmake.exe was not found in KincTools."
+          Write-Host "=========================================="
+          Write-Host "VERIFYING KINC WINDOWS TOOLS"
+          Write-Host "=========================================="
+
+          $tools = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "armorcore\Kinc\Tools\windows_x64"
+
+          $required = @(
+              "kmake.exe",
+              "kraffiti.exe",
+              "krafix.exe",
+              "D3DCompiler_47.dll",
+              "dxcompiler.dll",
+              "dxil.dll"
+          )
+
+          foreach ($file in $required) {
+
+              $path = Join-Path `
+                  $tools `
+                  $file
+
+              if (-not (Test-Path $path)) {
+                  throw "Required Kinc tool missing: $file"
+              }
+
+              $info = Get-Item $path
+
+              if ($info.Length -eq 0) {
+                  throw "Required Kinc tool is empty: $file"
+              }
+
+              Write-Host "OK: $file [$($info.Length) bytes]"
           }
 
           Write-Host ""
-          Write-Host "kmake.exe:"
-          Write-Host $kmake.FullName
-
-          $kraffiti = Get-ChildItem `
-              $tools `
-              -Filter "kraffiti.exe" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-
-          if ($kraffiti) {
-              Write-Host ""
-              Write-Host "kraffiti.exe:"
-              Write-Host $kraffiti.FullName
-          }
-
-          $krafix = Get-ChildItem `
-              $tools `
-              -Filter "krafix.exe" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-
-          if ($krafix) {
-              Write-Host ""
-              Write-Host "krafix.exe:"
-              Write-Host $krafix.FullName
-          }
+          Write-Host "kmake:"
+          & "$tools\kmake.exe" --help 2>&1 |
+              Select-Object -First 5
 
       # ============================================================
-      # 16. OBTER SHA DO V8
+      # 13. V8
       # ============================================================
-      - name: Determine exact V8 revision
+      - name: Determine V8 revision
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -681,7 +507,7 @@ jobs:
           $entry = git -C $armorcore ls-tree HEAD v8
 
           if (-not $entry) {
-              throw "V8 gitlink not found in ArmorCore."
+              throw "V8 gitlink not found."
           }
 
           $sha = $entry.Split("`t")[0].Split(" ")[2]
@@ -697,7 +523,7 @@ jobs:
           "V8_SHA=$sha" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 17. DOWNLOAD V8 EXACTO
+      # 14. DOWNLOAD V8
       # ============================================================
       - name: Download exact V8
         shell: powershell
@@ -712,23 +538,15 @@ jobs:
               $env:GITHUB_WORKSPACE `
               "armorcore\v8"
 
-          $zip = Join-Path `
+          $archive = Join-Path `
               $env:RUNNER_TEMP `
               "v8.zip"
 
           $extract = Join-Path `
               $env:RUNNER_TEMP `
-              "v8Extract"
+              "v8_extract"
 
           $url = "https://github.com/armory3d/v8_bin/archive/$env:V8_SHA.zip"
-
-          Write-Host ""
-          Write-Host "V8 SHA:"
-          Write-Host $env:V8_SHA
-
-          Write-Host ""
-          Write-Host "URL:"
-          Write-Host $url
 
           if (Test-Path $destination) {
               Remove-Item `
@@ -737,9 +555,9 @@ jobs:
                   -Force
           }
 
-          if (Test-Path $zip) {
+          if (Test-Path $archive) {
               Remove-Item `
-                  $zip `
+                  $archive `
                   -Force
           }
 
@@ -750,12 +568,16 @@ jobs:
                   -Force
           }
 
+          Write-Host ""
+          Write-Host "URL:"
+          Write-Host $url
+
           Invoke-WebRequest `
               -Uri $url `
-              -OutFile $zip `
+              -OutFile $archive `
               -UseBasicParsing
 
-          if (-not (Test-Path $zip)) {
+          if (-not (Test-Path $archive)) {
               throw "V8 archive was not downloaded."
           }
 
@@ -766,7 +588,7 @@ jobs:
               Out-Null
 
           Expand-Archive `
-              -Path $zip `
+              -Path $archive `
               -DestinationPath $extract `
               -Force
 
@@ -776,7 +598,7 @@ jobs:
               Select-Object -First 1
 
           if (-not $root) {
-              throw "V8 archive extraction failed."
+              throw "V8 extraction failed."
           }
 
           New-Item `
@@ -792,11 +614,10 @@ jobs:
               -Force
 
           Write-Host ""
-          Write-Host "V8 installed:"
-          Write-Host $destination
+          Write-Host "V8 installed."
 
       # ============================================================
-      # 18. VERIFICAR V8 MONOLITH
+      # 15. VALIDAR V8
       # ============================================================
       - name: Verify V8 monolith
         shell: powershell
@@ -804,30 +625,30 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "VERIFYING V8 MONOLITH"
+          Write-Host "VERIFYING V8"
           Write-Host "=========================================="
 
-          $releaseDir = Join-Path `
+          $release = Join-Path `
               $env:GITHUB_WORKSPACE `
               "armorcore\v8\libraries\win32\release"
 
           $archive = Join-Path `
-              $releaseDir `
+              $release `
               "v8_monolith.7z"
 
           if (-not (Test-Path $archive)) {
 
               Write-Host ""
-              Write-Host "Available files under V8 release directory:"
+              Write-Host "Available files:"
 
-              if (Test-Path $releaseDir) {
+              if (Test-Path $release) {
                   Get-ChildItem `
-                      $releaseDir `
+                      $release `
                       -Recurse |
                       Select-Object FullName, Length
               }
 
-              throw "v8_monolith.7z was not found."
+              throw "v8_monolith.7z not found."
           }
 
           Write-Host ""
@@ -835,7 +656,7 @@ jobs:
           Write-Host $archive
 
       # ============================================================
-      # 19. EXTRAIR V8 MONOLITH
+      # 16. EXTRAIR V8 MONOLITH
       # ============================================================
       - name: Extract V8 monolith
         shell: powershell
@@ -846,16 +667,16 @@ jobs:
           Write-Host "EXTRACTING V8 MONOLITH"
           Write-Host "=========================================="
 
-          $releaseDir = Join-Path `
+          $release = Join-Path `
               $env:GITHUB_WORKSPACE `
               "armorcore\v8\libraries\win32\release"
 
           $archive = Join-Path `
-              $releaseDir `
+              $release `
               "v8_monolith.7z"
 
           $lib = Join-Path `
-              $releaseDir `
+              $release `
               "v8_monolith.lib"
 
           if (-not (Test-Path $lib)) {
@@ -863,12 +684,12 @@ jobs:
               & $env:SEVEN_ZIP `
                   x `
                   $archive `
-                  "-o$releaseDir" `
+                  "-o$release" `
                   "-y" `
                   "-aoa"
 
               if ($LASTEXITCODE -ne 0) {
-                  throw "Failed to extract V8 monolith."
+                  throw "7-Zip failed to extract V8 monolith."
               }
           }
 
@@ -879,7 +700,7 @@ jobs:
           $info = Get-Item $lib
 
           Write-Host ""
-          Write-Host "Library:"
+          Write-Host "v8_monolith.lib:"
           Write-Host $info.FullName
 
           Write-Host ""
@@ -887,25 +708,92 @@ jobs:
           Write-Host "$($info.Length) bytes"
 
       # ============================================================
-      # 20. ONNX
-      #
-      # A configuração desta geração não precisa de ONNX para o build
-      # normal do ArmorPaint.
-      #
-      # Não inicializamos o submodule removido/antigo.
+      # 17. 7-ZIP
       # ============================================================
-      - name: Verify ONNX is not required
+      - name: Locate 7-Zip
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           Write-Host "=========================================="
-          Write-Host "ONNX CHECK"
+          Write-Host "LOCATING 7-ZIP"
           Write-Host "=========================================="
+
+          $paths = @(
+              "${env:ProgramFiles}\7-Zip\7z.exe",
+              "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+          )
+
+          $sevenZip = $null
+
+          foreach ($path in $paths) {
+
+              if (Test-Path $path) {
+                  $sevenZip = $path
+                  break
+              }
+          }
+
+          if (-not $sevenZip) {
+
+              $cmd = Get-Command 7z.exe `
+                  -ErrorAction SilentlyContinue
+
+              if ($cmd) {
+                  $sevenZip = $cmd.Source
+              }
+          }
+
+          if (-not $sevenZip) {
+              Write-Host "7-Zip not found. Installing..."
+              choco install 7zip -y --no-progress
+
+              foreach ($path in $paths) {
+
+                  if (Test-Path $path) {
+                      $sevenZip = $path
+                      break
+                  }
+              }
+          }
+
+          if (-not $sevenZip) {
+              throw "7-Zip could not be located."
+          }
 
           Write-Host ""
-          Write-Host "Skipping deprecated ONNX submodule."
+          Write-Host "7-Zip:"
+          Write-Host $sevenZip
+
+          "SEVEN_ZIP=$sevenZip" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 21. PATCH WINDOW HANDLING
+      # 18. REVALIDAR V8 APÓS 7-ZIP
+      # ============================================================
+      - name: Verify V8 library
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $lib = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "armorcore\v8\libraries\win32\release\v8_monolith.lib"
+
+          if (-not (Test-Path $lib)) {
+              throw "v8_monolith.lib was not found."
+          }
+
+          $info = Get-Item $lib
+
+          Write-Host "V8 library:"
+          Write-Host $info.FullName
+
+          Write-Host ""
+          Write-Host "Size:"
+          Write-Host "$($info.Length) bytes"
+
+      # ============================================================
+      # 19. WINDOW HANDLING PATCH
       # ============================================================
       - name: Apply window handling patch
         shell: powershell
@@ -925,7 +813,7 @@ jobs:
               "patch\window_handling.diff"
 
           if (-not (Test-Path $patch)) {
-              throw "window_handling.diff was not found."
+              throw "window_handling.diff not found."
           }
 
           Push-Location $armorcore
@@ -938,7 +826,7 @@ jobs:
                   --directory=Kinc
 
               if ($LASTEXITCODE -ne 0) {
-                  throw "window_handling.diff does not apply to the exact Kinc revision."
+                  throw "window_handling.diff does not apply to this Kinc revision."
               }
 
               git apply `
@@ -958,41 +846,58 @@ jobs:
           Write-Host "Patch applied successfully."
 
       # ============================================================
-      # 22. VERIFICAÇÃO COMPLETA ANTES DO BUILD
+      # 20. VERIFICAR MAKE
       # ============================================================
-      - name: Verify complete build tree
+      - name: Verify legacy Kinc build command
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "VERIFYING COMPLETE BUILD TREE"
+          Write-Host "VERIFYING KINC BUILD"
           Write-Host "=========================================="
 
-          $required = @(
-              "armorcore\make",
-              "armorcore\Kinc",
-              "armorcore\Kinc\make",
-              "armorcore\Kinc\Tools\windows_x64",
-              "armorcore\v8",
-              "armorcore\v8\libraries\win32\release\v8_monolith.lib",
-              "armorcore\patch\window_handling.diff",
-              "paint"
-          )
+          $make = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "armorcore\Kinc\make"
 
-          foreach ($path in $required) {
+          if (-not (Test-Path $make)) {
+              throw "Kinc make script was not found."
+          }
 
-              if (-not (Test-Path $path)) {
-                  throw "Required path missing: $path"
+          Write-Host ""
+          Write-Host "Kinc make:"
+          Write-Host $make
+
+          $tools = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "armorcore\Kinc\Tools\windows_x64"
+
+          $kmake = Join-Path `
+              $tools `
+              "kmake.exe"
+
+          $krafix = Join-Path `
+              $tools `
+              "krafix.exe"
+
+          $kraffiti = Join-Path `
+              $tools `
+              "kraffiti.exe"
+
+          foreach ($file in @($kmake, $krafix, $kraffiti)) {
+
+              if (-not (Test-Path $file)) {
+                  throw "Required Kinc executable missing: $file"
               }
 
-              Write-Host "OK: $path"
+              Write-Host "OK: $file"
           }
 
       # ============================================================
-      # 23. GERAR ARMORPAINT / KROM D3D11
+      # 21. GERAR PROJETO D3D11
       #
-      # Este é o comando histórico usado pela geração 0.9.
+      # Fluxo oficial da geração ArmorPaint 0.9.
       # ============================================================
       - name: Generate ArmorPaint D3D11 project
         shell: cmd
@@ -1016,45 +921,88 @@ jobs:
           echo Kinc make completed successfully.
 
       # ============================================================
-      # 24. VERIFICAR SOLUTION
+      # 22. VERIFICAR SOLUTION
       # ============================================================
-      - name: Verify generated solution
+      - name: Verify Visual Studio solution
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "VERIFYING GENERATED SOLUTION"
+          Write-Host "VERIFYING VISUAL STUDIO SOLUTION"
           Write-Host "=========================================="
 
-          $solution = Join-Path `
+          $expected = Join-Path `
               $env:GITHUB_WORKSPACE `
               "build\ArmorPaint.sln"
 
-          if (-not (Test-Path $solution)) {
+          if (Test-Path $expected) {
 
               Write-Host ""
-              Write-Host "Searching for .sln files..."
+              Write-Host "Found:"
+              Write-Host $expected
 
-              Get-ChildItem `
-                  $env:GITHUB_WORKSPACE `
-                  -Include "*.sln","*.slnx" `
-                  -File `
-                  -Recurse `
-                  -ErrorAction SilentlyContinue |
-                  Select-Object FullName
-
-              throw "build\ArmorPaint.sln was not generated."
+              "ARMORPAINT_SOLUTION=$expected" >> $env:GITHUB_ENV
+              exit 0
           }
 
           Write-Host ""
-          Write-Host "Solution:"
-          Write-Host $solution
+          Write-Host "ArmorPaint.sln not found."
+          Write-Host ""
+          Write-Host "Searching for .sln / .slnx..."
 
-          "ARMORPAINT_SOLUTION=$solution" >> $env:GITHUB_ENV
+          $solutions = Get-ChildItem `
+              -Path $env:GITHUB_WORKSPACE `
+              -Include "*.sln","*.slnx" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue
+
+          if (-not $solutions) {
+
+              Write-Host ""
+              Write-Host "Build tree:"
+
+              $build = Join-Path `
+                  $env:GITHUB_WORKSPACE `
+                  "build"
+
+              if (Test-Path $build) {
+                  Get-ChildItem `
+                      $build `
+                      -Recurse |
+                      Select-Object FullName
+              }
+
+              throw "No Visual Studio solution was generated."
+          }
+
+          Write-Host ""
+          Write-Host "Solutions found:"
+
+          foreach ($solution in $solutions) {
+              Write-Host $solution.FullName
+          }
+
+          $selected = $solutions |
+              Where-Object {
+                  $_.Name -eq "ArmorPaint.sln"
+              } |
+              Select-Object -First 1
+
+          if (-not $selected) {
+              $selected = $solutions |
+                  Select-Object -First 1
+          }
+
+          Write-Host ""
+          Write-Host "Using:"
+          Write-Host $selected.FullName
+
+          "ARMORPAINT_SOLUTION=$($selected.FullName)" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 25. COMPILAR RELEASE X64
+      # 23. COMPILAR RELEASE X64
       # ============================================================
       - name: Build ArmorPaint Release x64
         shell: powershell
@@ -1062,8 +1010,20 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "BUILDING ARMORPAINT RELEASE X64"
+          Write-Host "BUILDING RELEASE X64"
           Write-Host "=========================================="
+
+          if (-not $env:ARMORPAINT_SOLUTION) {
+              throw "ARMORPAINT_SOLUTION is not defined."
+          }
+
+          Write-Host ""
+          Write-Host "Solution:"
+          Write-Host $env:ARMORPAINT_SOLUTION
+
+          Write-Host ""
+          Write-Host "Configuration: Release"
+          Write-Host "Platform: x64"
 
           & msbuild.exe `
               $env:ARMORPAINT_SOLUTION `
@@ -1077,79 +1037,88 @@ jobs:
           }
 
           Write-Host ""
-          Write-Host "MSBuild completed successfully."
+          Write-Host "=========================================="
+          Write-Host "MSBUILD SUCCEEDED"
+          Write-Host "=========================================="
 
       # ============================================================
-      # 26. LOCALIZAR EXE
+      # 24. LOCALIZAR EXECUTÁVEL
       # ============================================================
-      - name: Verify compiled executable
+      - name: Find ArmorPaint executable
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "VERIFYING ARMORPAINT.EXE"
+          Write-Host "SEARCHING ARMORPAINT.EXE"
           Write-Host "=========================================="
 
-          $expected = Join-Path `
+          $build = Join-Path `
               $env:GITHUB_WORKSPACE `
-              "build\x64\Release\ArmorPaint.exe"
+              "build"
 
-          if (Test-Path $expected) {
-
-              $exe = Get-Item $expected
-
-          }
-          else {
-
-              Write-Host ""
-              Write-Host "Expected executable not found."
-              Write-Host ""
-              Write-Host "Searching..."
-
-              $matches = Get-ChildItem `
-                  (Join-Path $env:GITHUB_WORKSPACE "build") `
+          $matches = @(
+              Get-ChildItem `
+                  $build `
                   -Filter "ArmorPaint.exe" `
                   -File `
                   -Recurse `
                   -ErrorAction SilentlyContinue
+          )
 
-              if (-not $matches) {
-                  throw "ArmorPaint.exe was not generated."
-              }
+          if ($matches.Count -eq 0) {
 
-              $exe = $matches |
-                  Sort-Object FullName |
-                  Select-Object -Last 1
+              Write-Host ""
+              Write-Host "Executable files:"
+
+              Get-ChildItem `
+                  $build `
+                  -Filter "*.exe" `
+                  -File `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue |
+                  Select-Object FullName, Length
+
+              throw "ArmorPaint.exe was not produced."
           }
 
           Write-Host ""
-          Write-Host "Executable:"
-          Write-Host $exe.FullName
+          Write-Host "Found:"
 
-          Write-Host ""
-          Write-Host "Size:"
-          Write-Host "$($exe.Length) bytes"
-
-          if ($exe.Length -lt 1000000) {
-              throw "ArmorPaint.exe is suspiciously small."
+          foreach ($match in $matches) {
+              Write-Host "$($match.FullName) [$($match.Length) bytes]"
           }
 
-          "ARMORPAINT_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+          $selected = $matches |
+              Where-Object {
+                  $_.FullName -match "\\x64\\Release\\ArmorPaint\.exe$"
+              } |
+              Select-Object -First 1
+
+          if (-not $selected) {
+              $selected = $matches | Select-Object -First 1
+          }
+
+          if ($selected.Length -lt 1000000) {
+              throw "ArmorPaint.exe appears suspiciously small."
+          }
+
+          Write-Host ""
+          Write-Host "Selected:"
+          Write-Host $selected.FullName
+
+          "ARMORPAINT_EXE=$($selected.FullName)" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 27. MONTAR build/krom
-      #
-      # O runtime gerado pela ferramenta fica em build/krom.
-      # Copiamos os arquivos Release para lá.
+      # 25. MONTAR BUILD/KROM
       # ============================================================
-      - name: Assemble portable build
+      - name: Assemble portable package
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "ASSEMBLING PORTABLE BUILD"
+          Write-Host "ASSEMBLING PORTABLE PACKAGE"
           Write-Host "=========================================="
 
           $krom = Join-Path `
@@ -1164,13 +1133,17 @@ jobs:
               throw "build\krom does not exist."
           }
 
-          Write-Host ""
-          Write-Host "Runtime:"
-          Write-Host $krom
+          if (-not (Test-Path $release)) {
+              throw "Release directory does not exist."
+          }
 
           Write-Host ""
           Write-Host "Release:"
           Write-Host $release
+
+          Write-Host ""
+          Write-Host "Runtime:"
+          Write-Host $krom
 
           Copy-Item `
               -Path (Join-Path $release "*") `
@@ -1183,7 +1156,15 @@ jobs:
               "ArmorPaint.exe"
 
           if (-not (Test-Path $finalExe)) {
-              throw "ArmorPaint.exe is missing from build\krom."
+
+              Copy-Item `
+                  $env:ARMORPAINT_EXE `
+                  $finalExe `
+                  -Force
+          }
+
+          if (-not (Test-Path $finalExe)) {
+              throw "ArmorPaint.exe was not copied to build\krom."
           }
 
           Write-Host ""
@@ -1191,7 +1172,7 @@ jobs:
           Write-Host $finalExe
 
       # ============================================================
-      # 28. VERIFICAÇÃO FINAL
+      # 26. VERIFICAÇÃO FINAL
       # ============================================================
       - name: Verify final package
         shell: powershell
@@ -1199,7 +1180,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "FINAL PACKAGE"
+          Write-Host "FINAL PACKAGE VERIFICATION"
           Write-Host "=========================================="
 
           $krom = Join-Path `
@@ -1210,43 +1191,47 @@ jobs:
               $krom `
               "ArmorPaint.exe"
 
-          if (-not (Test-Path $exe)) {
-              throw "Final ArmorPaint.exe not found."
+          if (-not (Test-Path $krom)) {
+              throw "build\krom does not exist."
           }
 
-          $files = Get-ChildItem `
-              $krom `
-              -Recurse `
-              -File
+          if (-not (Test-Path $exe)) {
+              throw "ArmorPaint.exe does not exist."
+          }
 
-          if (-not $files) {
+          $info = Get-Item $exe
+
+          if ($info.Length -lt 1000000) {
+              throw "Final ArmorPaint.exe is suspiciously small."
+          }
+
+          $files = @(
+              Get-ChildItem `
+                  $krom `
+                  -Recurse `
+                  -File
+          )
+
+          if ($files.Count -eq 0) {
               throw "Final package is empty."
           }
 
           Write-Host ""
-          Write-Host "Executable:"
+          Write-Host "ArmorPaint.exe:"
           Write-Host $exe
 
           Write-Host ""
           Write-Host "Executable size:"
-          Write-Host "$((Get-Item $exe).Length) bytes"
+          Write-Host "$($info.Length) bytes"
 
           Write-Host ""
-          Write-Host "File count:"
+          Write-Host "Files:"
           Write-Host $files.Count
 
-          Write-Host ""
-          Write-Host "Package contents:"
-
-          foreach ($file in $files) {
-              $relative = $file.FullName.Substring($krom.Length).TrimStart("\")
-              Write-Host "$relative [$($file.Length) bytes]"
-          }
-
       # ============================================================
-      # 29. ZIP
+      # 27. ZIP
       # ============================================================
-      - name: Create ZIP
+      - name: Create portable ZIP
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -1285,11 +1270,11 @@ jobs:
           Write-Host $info.FullName
 
           Write-Host ""
-          Write-Host "ZIP size:"
+          Write-Host "Size:"
           Write-Host "$($info.Length) bytes"
 
       # ============================================================
-      # 30. UPLOAD DO PACOTE
+      # 28. UPLOAD DIRETÓRIO
       # ============================================================
       - name: Upload ArmorPaint 0.9 D3D11
         uses: actions/upload-artifact@v5
@@ -1300,7 +1285,7 @@ jobs:
           compression-level: 0
 
       # ============================================================
-      # 31. UPLOAD DO ZIP
+      # 29. UPLOAD ZIP
       # ============================================================
       - name: Upload ArmorPaint 0.9 D3D11 ZIP
         uses: actions/upload-artifact@v5
