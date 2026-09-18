@@ -12,19 +12,22 @@ jobs:
     runs-on: windows-latest
 
     steps:
+
       # ============================================================
-      # 1. CHECKOUT DA VERSÃO 0.9
+      # 1. CHECKOUT DA RELEASE 0.9
+      #
+      # A release chama-se "0.9-armorpaint", mas a TAG real é 23.08.
       # ============================================================
       - name: Checkout ArmorPaint 0.9
         uses: actions/checkout@v4
         with:
           repository: armory3d/armorpaint
-          ref: 0.9-armorpaint
+          ref: 23.08
           submodules: recursive
           fetch-depth: 0
 
       # ============================================================
-      # 2. VERIFICAR VERSÃO CHECKOUTADA
+      # 2. MOSTRAR VERSÃO
       # ============================================================
       - name: Show ArmorPaint revision
         shell: powershell
@@ -32,14 +35,16 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "ARMORPAINT VERSION"
+          Write-Host "ARMORPAINT REVISION"
           Write-Host "=========================================="
-
-          git describe --tags --always --dirty
 
           Write-Host ""
           Write-Host "Commit:"
           git rev-parse HEAD
+
+          Write-Host ""
+          Write-Host "Describe:"
+          git describe --tags --always --dirty
 
           Write-Host ""
           Write-Host "Submodules:"
@@ -70,18 +75,18 @@ jobs:
           }
 
           Write-Host ""
+          Write-Host "Submodules after initialization:"
           git submodule status --recursive
 
       # ============================================================
       # 4. NODE.JS
       #
-      # A árvore 0.9 é antiga; Node 16 é uma escolha mais conservadora
-      # do que Node 20/22 para as ferramentas daquela época.
+      # A versão 0.9 usa as ferramentas antigas do ArmorCore/Kinc.
       # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "16"
+          node-version: "20"
 
       # ============================================================
       # 5. MSBUILD
@@ -90,55 +95,69 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       # ============================================================
-      # 6. MSVC ENVIRONMENT
+      # 6. MSVC
       # ============================================================
-      - name: Setup MSVC environment
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
       # ============================================================
-      # 7. VERIFICAR VISUAL STUDIO / CLANG
+      # 7. VERIFICAR FERRAMENTAS
       # ============================================================
-      - name: Verify Visual Studio toolchain
+      - name: Verify Windows build tools
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "VERIFYING VISUAL STUDIO"
+          Write-Host "VERIFYING BUILD TOOLS"
           Write-Host "=========================================="
 
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          Write-Host ""
+          Write-Host "Node:"
+          node --version
 
-          if (-not (Test-Path $vswhere)) {
-              throw "vswhere.exe not found."
-          }
-
-          $vsInstall = & $vswhere `
-              -latest `
-              -products "*" `
-              -property installationPath
-
-          if (-not $vsInstall) {
-              throw "Visual Studio installation not found."
-          }
-
-          Write-Host "Visual Studio:"
-          Write-Host $vsInstall
+          Write-Host ""
+          Write-Host "npm:"
+          npm --version
 
           Write-Host ""
           Write-Host "MSBuild:"
-          Get-Command msbuild.exe |
-              Select-Object Source
+          msbuild.exe -version
 
           Write-Host ""
-          Write-Host "Clang:"
-          Get-Command clang-cl.exe -ErrorAction SilentlyContinue |
-              Select-Object Source
+          Write-Host "Git:"
+          git --version
+
+          Write-Host ""
+          Write-Host "Checking 7-Zip..."
+
+          $sevenZipCandidates = @(
+              "${env:ProgramFiles}\7-Zip\7z.exe",
+              "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+          )
+
+          $sevenZip = $null
+
+          foreach ($candidate in $sevenZipCandidates) {
+              if (Test-Path $candidate) {
+                  $sevenZip = $candidate
+                  break
+              }
+          }
+
+          if (-not $sevenZip) {
+              throw "7-Zip was not found on the GitHub runner."
+          }
+
+          Write-Host "7-Zip:"
+          Write-Host $sevenZip
+
+          "SEVEN_ZIP=$sevenZip" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 8. VERIFICAR ESTRUTURA DA VERSÃO 0.9
+      # 8. VERIFICAR ESTRUTURA DO ARMORPAINT 0.9
       # ============================================================
       - name: Verify ArmorPaint 0.9 source tree
         shell: powershell
@@ -146,7 +165,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "VERIFYING SOURCE TREE"
+          Write-Host "VERIFYING ARMORPAINT 0.9 SOURCE TREE"
           Write-Host "=========================================="
 
           $required = @(
@@ -155,11 +174,11 @@ jobs:
               "armorcore\v8",
               "armorcore\v8\libraries\win32\release",
               "armorcore\Kinc\make",
-              "armorcore\make",
               "paint"
           )
 
           foreach ($item in $required) {
+
               if (-not (Test-Path $item)) {
                   throw "Required path not found: $item"
               }
@@ -168,124 +187,100 @@ jobs:
           }
 
       # ============================================================
-      # 9. VERIFICAR 7-ZIP
+      # 9. LOCALIZAR V8 MONOLITH
       # ============================================================
-      - name: Ensure 7-Zip is available
+      - name: Verify V8 monolith archive
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "CHECKING 7-ZIP"
+          Write-Host "VERIFYING V8 MONOLITH"
           Write-Host "=========================================="
 
-          $sevenZip = $null
-
-          $candidates = @(
-              "${env:ProgramFiles}\7-Zip\7z.exe",
-              "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
-          )
-
-          foreach ($candidate in $candidates) {
-              if (Test-Path $candidate) {
-                  $sevenZip = $candidate
-                  break
-              }
-          }
-
-          if (-not $sevenZip) {
-              Write-Host "7-Zip not found. Installing with Chocolatey..."
-
-              choco install 7zip -y --no-progress
-
-              foreach ($candidate in $candidates) {
-                  if (Test-Path $candidate) {
-                      $sevenZip = $candidate
-                      break
-                  }
-              }
-          }
-
-          if (-not $sevenZip) {
-              throw "7-Zip could not be located."
-          }
-
-          Write-Host "7-Zip:"
-          Write-Host $sevenZip
-
-          & $sevenZip i |
-              Select-Object -First 5
-
-          "SEVEN_ZIP=$sevenZip" >> $env:GITHUB_ENV
-
-      # ============================================================
-      # 10. VERIFICAR V8 MONOLITH
-      # ============================================================
-      - name: Verify V8 monolith package
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=========================================="
-          Write-Host "CHECKING V8 MONOLITH"
-          Write-Host "=========================================="
+          $v8Dir = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "armorcore\v8\libraries\win32\release"
 
           $v8Archive = Join-Path `
-              $env:GITHUB_WORKSPACE `
-              "armorcore\v8\libraries\win32\release\v8_monolith.7z"
-
-          $v8Directory = Split-Path $v8Archive -Parent
+              $v8Dir `
+              "v8_monolith.7z"
 
           if (-not (Test-Path $v8Archive)) {
               throw "v8_monolith.7z not found: $v8Archive"
           }
 
-          Write-Host "Archive:"
+          Write-Host "Found:"
           Write-Host $v8Archive
 
-          $existingLib = Join-Path `
-              $v8Directory `
+      # ============================================================
+      # 10. EXTRAIR V8 MONOLITH
+      # ============================================================
+      - name: Extract V8 monolith
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=========================================="
+          Write-Host "EXTRACTING V8 MONOLITH"
+          Write-Host "=========================================="
+
+          $v8Dir = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "armorcore\v8\libraries\win32\release"
+
+          $v8Archive = Join-Path `
+              $v8Dir `
+              "v8_monolith.7z"
+
+          $v8Lib = Join-Path `
+              $v8Dir `
               "v8_monolith.lib"
 
-          if (Test-Path $existingLib) {
-              Write-Host ""
+          if (Test-Path $v8Lib) {
               Write-Host "v8_monolith.lib already exists."
           }
           else {
+
               Write-Host ""
-              Write-Host "Extracting v8_monolith.7z..."
+              Write-Host "Extracting:"
+              Write-Host $v8Archive
 
               & $env:SEVEN_ZIP x `
                   $v8Archive `
-                  "-o$v8Directory" `
-                  -y `
-                  -aoa
+                  "-o$v8Dir" `
+                  "-y" `
+                  "-aoa"
 
               if ($LASTEXITCODE -ne 0) {
-                  throw "Failed to extract v8_monolith.7z."
+                  throw "7-Zip failed to extract v8_monolith.7z."
               }
           }
 
-          if (-not (Test-Path $existingLib)) {
-              throw "v8_monolith.lib was not extracted."
+          if (-not (Test-Path $v8Lib)) {
+              throw "v8_monolith.lib was not created."
           }
 
-          $libInfo = Get-Item $existingLib
+          $info = Get-Item $v8Lib
 
           Write-Host ""
           Write-Host "V8 library:"
-          Write-Host $libInfo.FullName
+          Write-Host $info.FullName
 
           Write-Host ""
           Write-Host "Size:"
-          Write-Host "$($libInfo.Length) bytes"
+          Write-Host "$($info.Length) bytes"
 
       # ============================================================
-      # 11. GERAR OS ASSETS / KROM
+      # 11. GERAR BUILD/KROM
       #
-      # Este é o primeiro make da arquitetura antiga.
+      # Este é o fluxo da geração ArmorPaint 0.9.
+      #
+      # node armorcore/make -g direct3d11
+      #
+      # O resultado deve gerar o conteúdo inicial de build/krom.
       # ============================================================
-      - name: Generate ArmorPaint 0.9 runtime
+      - name: Generate ArmorPaint runtime
         shell: cmd
         run: |
           echo ==========================================
@@ -295,73 +290,50 @@ jobs:
           node armorcore/make -g direct3d11
 
           if errorlevel 1 (
-            echo.
-            echo ArmorPaint runtime generation failed.
-            exit /b 1
+              echo.
+              echo ARMORCORE MAKE FAILED
+              exit /b 1
           )
 
           echo.
           echo Runtime generation completed.
 
       # ============================================================
-      # 12. APLICAR WINDOW HANDLING PATCH
-      #
-      # Se já estiver aplicado, não aplicamos novamente.
+      # 12. VERIFICAR BUILD/KROM
       # ============================================================
-      - name: Apply window handling patch
+      - name: Verify generated runtime
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "WINDOW HANDLING PATCH"
+          Write-Host "VERIFYING GENERATED RUNTIME"
           Write-Host "=========================================="
 
-          $patch = Join-Path `
+          $kromDir = Join-Path `
               $env:GITHUB_WORKSPACE `
-              "armorcore\patch\window_handling.diff"
+              "build\krom"
 
-          if (-not (Test-Path $patch)) {
-              Write-Warning "window_handling.diff not found."
-              Write-Warning "Continuing without patch."
-              exit 0
+          if (-not (Test-Path $kromDir)) {
+              throw "build\krom was not generated."
           }
 
-          Write-Host "Patch:"
-          Write-Host $patch
+          Write-Host ""
+          Write-Host "build\krom contents:"
 
-          # Verificar se ainda pode ser aplicado.
-          git apply --check $patch --directory=armorcore/Kinc
-
-          if ($LASTEXITCODE -eq 0) {
-              Write-Host ""
-              Write-Host "Patch is applicable. Applying..."
-
-              git apply $patch --directory=armorcore/Kinc
-
-              if ($LASTEXITCODE -ne 0) {
-                  throw "Failed to apply window handling patch."
+          Get-ChildItem `
+              $kromDir `
+              -Recurse `
+              -File |
+              ForEach-Object {
+                  $relative = $_.FullName.Substring($kromDir.Length).TrimStart("\")
+                  Write-Host "$relative [$($_.Length) bytes]"
               }
-
-              Write-Host "Patch applied."
-              exit 0
-          }
-
-          # Se não pode ser aplicado, verificar se já está aplicado.
-          git apply --reverse --check $patch --directory=armorcore/Kinc
-
-          if ($LASTEXITCODE -eq 0) {
-              Write-Host ""
-              Write-Host "Patch already appears to be applied."
-              exit 0
-          }
-
-          throw "window_handling.diff cannot be applied and does not appear to already be applied."
 
       # ============================================================
       # 13. GERAR PROJETO VISUAL STUDIO D3D11
       #
-      # --from armorcore faz o Kinc gerar o projeto ArmorPaint.
+      # Fluxo documentado para a geração 0.9.
       # ============================================================
       - name: Generate Visual Studio project
         shell: cmd
@@ -370,81 +342,70 @@ jobs:
           echo GENERATING VISUAL STUDIO PROJECT
           echo ==========================================
 
-          node armorcore/Kinc/make --from armorcore -g direct3d11
+          armorcore\Kinc\make --from armorcore -g direct3d11
 
           if errorlevel 1 (
-            echo.
-            echo Visual Studio project generation failed.
-            exit /b 1
+              echo.
+              echo KINC MAKE FAILED
+              exit /b 1
           )
 
           echo.
           echo Visual Studio project generated.
 
       # ============================================================
-      # 14. LOCALIZAR SOLUTION
+      # 14. PROCURAR ARMORPAINT.SLN
       # ============================================================
-      - name: Verify generated solution
+      - name: Find generated solution
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "SEARCHING GENERATED SOLUTION"
+          Write-Host "SEARCHING VISUAL STUDIO SOLUTION"
           Write-Host "=========================================="
 
-          $possibleSolutions = @(
-              "build\ArmorPaint.sln",
-              "build\Krom.sln",
-              "build\ArmorPaint.slnx",
-              "armorcore\build\Krom.sln",
-              "armorcore\build\ArmorPaint.sln"
-          )
+          $buildDir = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "build"
 
-          $found = @()
-
-          foreach ($path in $possibleSolutions) {
-              $full = Join-Path `
-                  $env:GITHUB_WORKSPACE `
-                  $path
-
-              if (Test-Path $full) {
-                  $found += Get-Item $full
-                  Write-Host "FOUND: $full"
-              }
+          if (-not (Test-Path $buildDir)) {
+              throw "build directory was not generated."
           }
 
-          if ($found.Count -eq 0) {
+          $solutions = Get-ChildItem `
+              -Path $buildDir `
+              -Include "*.sln","*.slnx" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue
+
+          if (-not $solutions) {
               Write-Host ""
-              Write-Host "Searching all solution files..."
+              Write-Host "Files inside build:"
+              Get-ChildItem `
+                  $buildDir `
+                  -Recurse |
+                  Select-Object FullName
 
-              $found = Get-ChildItem `
-                  -Path $env:GITHUB_WORKSPACE `
-                  -Include "*.sln","*.slnx" `
-                  -File `
-                  -Recurse `
-                  -ErrorAction SilentlyContinue
-          }
-
-          if ($found.Count -eq 0) {
               throw "No Visual Studio solution was generated."
           }
 
           Write-Host ""
-          Write-Host "Solutions found:"
+          Write-Host "Found solution(s):"
 
-          foreach ($solution in $found) {
+          foreach ($solution in $solutions) {
               Write-Host $solution.FullName
           }
 
-          $selected = $found |
+          $selected = $solutions |
               Where-Object {
                   $_.Name -eq "ArmorPaint.sln"
               } |
               Select-Object -First 1
 
           if (-not $selected) {
-              $selected = $found |
+              $selected = $solutions |
                   Where-Object {
                       $_.Name -eq "Krom.sln"
                   } |
@@ -452,7 +413,8 @@ jobs:
           }
 
           if (-not $selected) {
-              $selected = $found | Select-Object -First 1
+              $selected = $solutions |
+                  Select-Object -First 1
           }
 
           Write-Host ""
@@ -462,7 +424,7 @@ jobs:
           "ARMORPAINT_SOLUTION=$($selected.FullName)" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 15. BUILD RELEASE X64
+      # 15. COMPILAR RELEASE X64
       # ============================================================
       - name: Build Release x64
         shell: powershell
@@ -474,9 +436,10 @@ jobs:
           Write-Host "=========================================="
 
           if (-not $env:ARMORPAINT_SOLUTION) {
-              throw "ARMORPAINT_SOLUTION is not defined."
+              throw "ARMORPAINT_SOLUTION is not set."
           }
 
+          Write-Host ""
           Write-Host "Solution:"
           Write-Host $env:ARMORPAINT_SOLUTION
 
@@ -487,8 +450,8 @@ jobs:
           & msbuild.exe `
               $env:ARMORPAINT_SOLUTION `
               /m `
-              /p:Configuration=Release `
-              /p:Platform=x64 `
+              /property:Configuration=Release `
+              /property:Platform=x64 `
               /verbosity:minimal
 
           if ($LASTEXITCODE -ne 0) {
@@ -497,11 +460,17 @@ jobs:
 
           Write-Host ""
           Write-Host "=========================================="
-          Write-Host "BUILD COMPLETED"
+          Write-Host "MSBUILD COMPLETED SUCCESSFULLY"
           Write-Host "=========================================="
 
       # ============================================================
       # 16. LOCALIZAR EXECUTÁVEL
+      #
+      # A geração antiga normalmente produz:
+      #
+      # build/x64/Release/ArmorPaint.exe
+      #
+      # Alguns estados da árvore usam Krom.exe.
       # ============================================================
       - name: Find compiled executable
         shell: powershell
@@ -512,34 +481,30 @@ jobs:
           Write-Host "SEARCHING COMPILED EXECUTABLE"
           Write-Host "=========================================="
 
+          $buildDir = Join-Path `
+              $env:GITHUB_WORKSPACE `
+              "build"
+
           $candidates = Get-ChildItem `
-              -Path $env:GITHUB_WORKSPACE `
+              -Path $buildDir `
               -Include "ArmorPaint.exe","Krom.exe" `
               -File `
               -Recurse `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                  $_.FullName -match "\\(x64|x86)\\Release\\"
-              }
+              -ErrorAction SilentlyContinue
 
-          if ($candidates.Count -eq 0) {
+          if (-not $candidates) {
               Write-Host ""
-              Write-Host "Searching entire workspace..."
+              Write-Host "Build directory contents:"
+              Get-ChildItem `
+                  $buildDir `
+                  -Recurse |
+                  Select-Object FullName
 
-              $candidates = Get-ChildItem `
-                  -Path $env:GITHUB_WORKSPACE `
-                  -Include "ArmorPaint.exe","Krom.exe" `
-                  -File `
-                  -Recurse `
-                  -ErrorAction SilentlyContinue
-          }
-
-          if ($candidates.Count -eq 0) {
-              throw "No compiled ArmorPaint.exe or Krom.exe was found."
+              throw "No ArmorPaint.exe or Krom.exe was found."
           }
 
           Write-Host ""
-          Write-Host "Candidates:"
+          Write-Host "Executable candidates:"
 
           foreach ($candidate in $candidates) {
               Write-Host "$($candidate.FullName) [$($candidate.Length) bytes]"
@@ -572,99 +537,93 @@ jobs:
           "COMPILED_EXE=$($selected.FullName)" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 17. PREPARAR BUILD/KROM
-      #
-      # A própria documentação histórica manda colocar o exe
-      # compilado dentro de build/krom.
+      # 17. COPIAR EXECUTÁVEL PARA BUILD/KROM
       # ============================================================
-      - name: Assemble build/krom
+      - name: Assemble portable runtime
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "ASSEMBLING BUILD/KROM"
+          Write-Host "ASSEMBLING PORTABLE RUNTIME"
           Write-Host "=========================================="
 
-          $krom = Join-Path `
+          $kromDir = Join-Path `
               $env:GITHUB_WORKSPACE `
               "build\krom"
 
-          if (-not (Test-Path $krom)) {
-              throw "build\krom was not generated by ArmorPaint."
+          if (-not (Test-Path $kromDir)) {
+              throw "build\krom does not exist."
           }
 
           if (-not (Test-Path $env:COMPILED_EXE)) {
-              throw "Compiled executable not found."
+              throw "Compiled executable does not exist."
           }
 
-          Write-Host "Runtime directory:"
-          Write-Host $krom
+          $releaseDir = Split-Path `
+              $env:COMPILED_EXE `
+              -Parent
 
           Write-Host ""
-          Write-Host "Compiled executable:"
-          Write-Host $env:COMPILED_EXE
-
-          # Copiar TODOS os artefatos da configuração Release.
-          $releaseDir = Split-Path $env:COMPILED_EXE -Parent
-
-          Write-Host ""
-          Write-Host "Copying Release files from:"
+          Write-Host "Release directory:"
           Write-Host $releaseDir
+
+          Write-Host ""
+          Write-Host "Copying Release files to build/krom..."
 
           Copy-Item `
               -Path (Join-Path $releaseDir "*") `
-              -Destination $krom `
+              -Destination $kromDir `
               -Recurse `
               -Force
 
-          # Garantir um nome simples para o launcher.
-          $armorPaintTarget = Join-Path `
-              $krom `
+          # ----------------------------------------------------------
+          # Garantir ArmorPaint.exe
+          # ----------------------------------------------------------
+          $armorPaintExe = Join-Path `
+              $kromDir `
               "ArmorPaint.exe"
 
-          $compiledName = Split-Path `
-              $env:COMPILED_EXE `
-              -Leaf
+          $kromExe = Join-Path `
+              $kromDir `
+              "Krom.exe"
 
-          $compiledInKrom = Join-Path `
-              $krom `
-              $compiledName
+          if (-not (Test-Path $armorPaintExe)) {
 
-          if ($compiledName -ne "ArmorPaint.exe") {
+              if (Test-Path $kromExe) {
 
-              if (-not (Test-Path $compiledInKrom)) {
-                  throw "Compiled executable was not copied into build/krom."
+                  Write-Host ""
+                  Write-Host "Renaming Krom.exe -> ArmorPaint.exe"
+
+                  Copy-Item `
+                      $kromExe `
+                      $armorPaintExe `
+                      -Force
               }
-
-              Copy-Item `
-                  $compiledInKrom `
-                  $armorPaintTarget `
-                  -Force
           }
 
-          if (-not (Test-Path $armorPaintTarget)) {
-              throw "ArmorPaint.exe was not placed in build/krom."
+          if (-not (Test-Path $armorPaintExe)) {
+              throw "ArmorPaint.exe was not found in build/krom."
           }
 
           Write-Host ""
           Write-Host "Final executable:"
-          Write-Host $armorPaintTarget
+          Write-Host $armorPaintExe
 
           Write-Host ""
-          Write-Host "build/krom contents:"
+          Write-Host "Portable runtime contents:"
 
           Get-ChildItem `
-              $krom `
+              $kromDir `
               -Recurse `
               -File |
               ForEach-Object {
-                  $relative = $_.FullName.Substring($krom.Length).TrimStart("\")
+                  $relative = $_.FullName.Substring($kromDir.Length).TrimStart("\")
                   Write-Host "$relative [$($_.Length) bytes]"
               }
 
       # ============================================================
-      # 18. VERIFICAÇÃO FINAL DO PACOTE
+      # 18. VERIFICAÇÃO FINAL
       # ============================================================
       - name: Verify final package
         shell: powershell
@@ -675,57 +634,51 @@ jobs:
           Write-Host "VERIFYING FINAL PACKAGE"
           Write-Host "=========================================="
 
-          $krom = Join-Path `
+          $kromDir = Join-Path `
               $env:GITHUB_WORKSPACE `
               "build\krom"
 
           $exe = Join-Path `
-              $krom `
+              $kromDir `
               "ArmorPaint.exe"
 
-          if (-not (Test-Path $krom)) {
-              throw "build/krom does not exist."
-          }
-
           if (-not (Test-Path $exe)) {
-              throw "ArmorPaint.exe missing from build/krom."
+              throw "Final ArmorPaint.exe does not exist."
           }
 
-          $fileCount = (
-              Get-ChildItem `
-                  $krom `
-                  -Recurse `
-                  -File
-          ).Count
-
-          if ($fileCount -eq 0) {
-              throw "build/krom is empty."
-          }
-
-          $exeInfo = Get-Item $exe
+          $info = Get-Item $exe
 
           Write-Host ""
           Write-Host "ArmorPaint.exe:"
-          Write-Host $exeInfo.FullName
+          Write-Host $info.FullName
 
           Write-Host ""
           Write-Host "Size:"
-          Write-Host "$($exeInfo.Length) bytes"
+          Write-Host "$($info.Length) bytes"
+
+          $files = Get-ChildItem `
+              $kromDir `
+              -Recurse `
+              -File
 
           Write-Host ""
-          Write-Host "Total package files:"
-          Write-Host $fileCount
+          Write-Host "Total files:"
+          Write-Host $files.Count
+
+          if ($files.Count -eq 0) {
+              throw "Portable package is empty."
+          }
 
       # ============================================================
-      # 19. ZIP PORTÁTIL
+      # 19. CRIAR ZIP
       # ============================================================
-      - name: Create portable ZIP
+      - name: Create ZIP
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "=========================================="
-          Write-Host "CREATING PORTABLE ZIP"
+          Write-Host "CREATING ZIP"
           Write-Host "=========================================="
 
           $source = Join-Path `
@@ -737,7 +690,9 @@ jobs:
               "ArmorPaint-0.9-Windows-x64-D3D11.zip"
 
           if (Test-Path $zip) {
-              Remove-Item $zip -Force
+              Remove-Item `
+                  $zip `
+                  -Force
           }
 
           Compress-Archive `
@@ -746,7 +701,7 @@ jobs:
               -CompressionLevel Optimal
 
           if (-not (Test-Path $zip)) {
-              throw "Failed to create ZIP."
+              throw "ZIP was not created."
           }
 
           $zipInfo = Get-Item $zip
@@ -760,7 +715,7 @@ jobs:
           Write-Host "$($zipInfo.Length) bytes"
 
       # ============================================================
-      # 20. UPLOAD DO PACOTE
+      # 20. UPLOAD DO DIRETÓRIO PORTÁTIL
       # ============================================================
       - name: Upload ArmorPaint 0.9 D3D11
         uses: actions/upload-artifact@v4
