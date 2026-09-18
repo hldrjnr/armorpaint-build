@@ -1,4 +1,4 @@
-name: Build ArmorPaint Windows x64
+name: Build ArmorPaint 0.9 Windows x64 DX11
 
 on:
   workflow_dispatch:
@@ -8,21 +8,21 @@ permissions:
 
 jobs:
   build:
-    name: Build ArmorPaint Windows x64
+    name: Build ArmorPaint 0.9 Windows x64 DX11
     runs-on: windows-latest
     timeout-minutes: 180
 
     env:
       ARMORPAINT_REPO: armory3d/armorpaint
-      ARMORPAINT_REF: main
+      ARMORPAINT_REF: 23.08
       ARMORCORE_REPO: armory3d/armorcore
       ARMORCORE_REF: main
 
     steps:
       # ============================================================
-      # 1. Checkout the main project
+      # 1. Checkout the correct ArmorPaint version
       # ============================================================
-      - name: Checkout ArmorPaint
+      - name: Checkout ArmorPaint 0.9
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ARMORPAINT_REPO }}
@@ -181,14 +181,14 @@ jobs:
           }
 
       # ============================================================
-      # 6. Build ArmorPaint
+      # 6. Build ArmorPaint 0.9 with DX11
       # ============================================================
       - name: Build ArmorPaint
         shell: cmd
         working-directory: paint
         run: |
           echo ==========================================
-          echo BUILDING ARMORPAINT WINDOWS X64
+          echo BUILDING ARMORPAINT 0.9 WINDOWS X64 DX11
           echo ==========================================
 
           ..\base\make.bat --target windows --graphics direct3d11 --compile
@@ -412,7 +412,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $artifact = Join-Path $env:GITHUB_WORKSPACE "artifact"
-          $zip = Join-Path $env:GITHUB_WORKSPACE "ArmorPaint-Windows-x64.zip"
+          $zip = Join-Path $env:GITHUB_WORKSPACE "ArmorPaint-0.9-Windows-x64-DX11.zip"
 
           if (Test-Path $zip) {
               Remove-Item $zip -Force
@@ -436,7 +436,7 @@ jobs:
       - name: Upload portable folder
         uses: actions/upload-artifact@v4
         with:
-          name: ArmorPaint-Windows-x64
+          name: ArmorPaint-0.9-Windows-x64-DX11
           path: artifact
           if-no-files-found: error
           compression-level: 0
@@ -447,7 +447,7 @@ jobs:
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: ArmorPaint-Windows-x64-ZIP
-          path: ArmorPaint-Windows-x64.zip
+          name: ArmorPaint-0.9-Windows-x64-DX11-ZIP
+          path: ArmorPaint-0.9-Windows-x64-DX11.zip
           if-no-files-found: error
           compression-level: 0
