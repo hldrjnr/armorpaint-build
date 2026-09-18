@@ -237,9 +237,10 @@ jobs:
               Select-Object FullName, Length
 
       # ============================================================
-      # 8. Teste real de inicialização
+      # 8. Teste real de inicialização (somente em runner com GPU/desktop)
       # ============================================================
       - name: Test ArmorPaint startup
+        if: ${{ runner.environment == 'self-hosted' }}
         shell: powershell
         working-directory: paint\build\out
         run: |
@@ -268,28 +269,31 @@ jobs:
           Write-Host ""
           Write-Host "Process ID: $($process.Id)"
 
-          Start-Sleep -Seconds 15
+          try {
+              Start-Sleep -Seconds 15
 
-          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+              $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
 
-          if ($running) {
-              Write-Host ""
-              Write-Host "ArmorPaint remained running for 15 seconds."
-              Write-Host "Startup test passed."
-
-              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          }
-          else {
-              $process.Refresh()
-
-              Write-Host ""
-              Write-Host "ArmorPaint exited during startup."
-
-              if ($null -ne $process.ExitCode) {
-                  Write-Host "Exit code: $($process.ExitCode)"
+              if ($running) {
+                  Write-Host ""
+                  Write-Host "ArmorPaint remained running for 15 seconds."
+                  Write-Host "Startup test passed."
               }
+              else {
+                  $process.Refresh()
 
-              throw "ArmorPaint failed to stay running."
+                  Write-Host ""
+                  Write-Host "ArmorPaint exited during startup."
+
+                  if ($null -ne $process.ExitCode) {
+                      Write-Host "Exit code: $($process.ExitCode)"
+                  }
+
+                  throw "ArmorPaint failed to stay running."
+              }
+          }
+          finally {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
           }
 
       # ============================================================
