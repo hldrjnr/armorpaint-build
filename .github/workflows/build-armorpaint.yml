@@ -121,8 +121,9 @@ jobs:
 
           $required = @(
               "base\make.bat",
-              "base\tools\make.js",
               "base\tools\bin\windows_x64\amake.exe",
+              "base\project.c",
+              "paint\project.c",
               "paint"
           )
 
@@ -133,6 +134,10 @@ jobs:
 
               Write-Host "OK: $item"
           }
+
+          Write-Host ""
+          Write-Host "base/tools contents:"
+          Get-ChildItem -Path "base\tools" | ForEach-Object { Write-Host $_.FullName }
 
       # ============================================================
       # 5. LIMPAR BUILD ANTERIOR
@@ -161,13 +166,6 @@ jobs:
 
       # ============================================================
       # 6. BUILD OFICIAL
-      #
-      # O make atual:
-      # - gera o projeto Visual Studio
-      # - usa ClangCL
-      # - compila Release x64
-      # - usa Direct3D12 por padrão no Windows
-      # - coloca o resultado em paint/build/out
       # ============================================================
       - name: Build ArmorPaint Release x64
         shell: cmd
@@ -244,13 +242,6 @@ jobs:
 
       # ============================================================
       # 8. DIAGNÓSTICO DE CARREGAMENTO
-      #
-      # IMPORTANTE:
-      # Este passo NÃO pode falhar o workflow.
-      #
-      # --help retorna código 1 por design.
-      # Usamos isso apenas para obter stdout/stderr e verificar
-      # se o executável consegue carregar o parser de argumentos.
       # ============================================================
       - name: Diagnostic executable loading
         shell: powershell
@@ -310,8 +301,6 @@ jobs:
 
       # ============================================================
       # 9. CRIAR PACOTE PORTÁTIL
-      #
-      # Copiamos literalmente TODO o paint/build/out.
       # ============================================================
       - name: Create portable package
         shell: powershell
