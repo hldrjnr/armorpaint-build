@@ -1,0 +1,206 @@
+name: Build ArmorPaint Linux x64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ArmorPaint Linux x64
+    # ubuntu-24.04 = mesma base do Linux Mint 22.3 deste PC (glibc 2.39),
+    # garantindo que o binario rode neste dispositivo.
+    runs-on: ubuntu-24.04
+
+    steps:
+      # ============================================================
+      # 1. CHECKOUT DESTE REPOSITORIO (scripts da pasta linux/)
+      # ============================================================
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. CHECKOUT DO ARMORPAINT OFICIAL
+      # ============================================================
+      - name: Checkout ArmorPaint
+        uses: actions/checkout@v4
+        with:
+          repository: armory3d/armorpaint
+          ref: main
+          path: armorpaint
+          submodules: recursive
+          fetch-depth: 0
+
+      # ============================================================
+      # 3. MOSTRAR O AMBIENTE DE BUILD
+      # ============================================================
+      - name: Show build environment
+        run: |
+          set -e
+          echo "=========================================="
+          echo "BUILD ENVIRONMENT"
+          echo "=========================================="
+          uname -a
+          echo ""
+          ldd --version | head -n 1
+          echo ""
+          make --version | head -n 1
+          echo ""
+          clang --version | head -n 1
+          echo ""
+          echo "CPU cores: $(nproc)"
+          free -h
+
+      # ============================================================
+      # 4. DEPENDENCIAS DE LINUX (base/docs/linux_deps.md)
+      # ============================================================
+      - name: Install Linux dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make \
+            clang \
+            libvulkan-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libx11-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libasound2-dev
+          echo ""
+          clang --version | head -n 1
+
+      # ============================================================
+      # 5. VERIFICAR A ARVORE DE FONTE
+      # ============================================================
+      - name: Verify ArmorPaint source tree
+        run: |
+          set -eu
+          cd armorpaint
+
+          echo "=========================================="
+          echo "VERIFYING SOURCE TREE"
+          echo "=========================================="
+
+          for item in base/make base/project.c paint/project.c base/tools/bin/linux_x64/amake; do
+            if [ ! -e "$item" ]; then
+              echo "Required path not found: $item"
+              exit 1
+            fi
+            echo "OK: $item"
+          done
+
+          echo ""
+          echo "base/tools contents:"
+          ls -la base/tools
+
+      # ============================================================
+      # 6. LIMPAR BUILD ANTERIOR
+      # ============================================================
+      - name: Clean build directory
+        run: |
+          rm -rf armorpaint/paint/build
+          echo "Build directory cleaned."
+
+      # ============================================================
+      # 7. BUILD OFICIAL (linux, release, x64)
+      # ============================================================
+      - name: Build ArmorPaint Release x64
+        working-directory: armorpaint/paint
+        run: |
+          set -eux
+          echo "=========================================="
+          echo "BUILDING ARMORPAINT RELEASE X64"
+          echo "=========================================="
+
+          chmod +x ../base/make ../base/tools/bin/linux_x64/amake
+
+          ../base/make --target linux --compile
+
+          echo ""
+          echo "=========================================="
+          echo "ARMORPAINT BUILD COMPLETED"
+          echo "=========================================="
+
+      # ============================================================
+      # 8. VERIFICAR O OUTPUT
+      # ============================================================
+      - name: Verify build output
+        run: |
+          set -eu
+          out=armorpaint/paint/build/out
+          exe="$out/ArmorPaint"
+
+          echo "=========================================="
+          echo "VERIFYING BUILD OUTPUT"
+          echo "=========================================="
+
+          if [ ! -d "$out" ]; then
+            echo "Expected output directory does not exist: $out"
+            exit 1
+          fi
+
+          if [ ! -x "$exe" ]; then
+            echo "Executable not found or not executable: $exe"
+            exit 1
+          fi
+
+          file "$exe"
+          echo ""
+          echo "Package contents:"
+          find "$out" -type f | sort | while read -r f; do
+            echo "$f [$(stat -c%s "$f") bytes]"
+          done
+
+          echo ""
+          echo "Shared library dependencies:"
+          ldd "$exe"
+
+          echo ""
+          if ldd "$exe" | grep -q "not found"; then
+            echo "Some shared libraries are missing on the runner."
+            exit 1
+          fi
+          echo "All shared libraries resolved."
+
+      # ============================================================
+      # 9. CRIAR PACOTE PORTATIL (tar.gz mantem o bit de executacao)
+      # ============================================================
+      - name: Create portable package
+        run: |
+          set -eux
+          echo "=========================================="
+          echo "CREATING PORTABLE PACKAGE"
+          echo "=========================================="
+
+          rm -rf ArmorPaint-Linux-x64
+          mkdir -p ArmorPaint-Linux-x64
+          cp -a armorpaint/paint/build/out/. ArmorPaint-Linux-x64/
+          cp -a linux/ArmorPaint.sh ArmorPaint-Linux-x64/ArmorPaint.sh
+          cp -a linux/instalar-desktop.sh ArmorPaint-Linux-x64/instalar-desktop.sh
+          cp -a linux/LEIA-ME.txt ArmorPaint-Linux-x64/LEIA-ME.txt
+          chmod +x ArmorPaint-Linux-x64/ArmorPaint.sh ArmorPaint-Linux-x64/instalar-desktop.sh
+
+          rm -f ArmorPaint-Linux-x64.tar.gz
+          tar -czf ArmorPaint-Linux-x64.tar.gz ArmorPaint-Linux-x64
+
+          echo ""
+          echo "Package contents:"
+          tar -tzvf ArmorPaint-Linux-x64.tar.gz
+
+          echo ""
+          ls -lh ArmorPaint-Linux-x64.tar.gz
+
+      # ============================================================
+      # 10. UPLOAD DO ARTEFATO
+      # ============================================================
+      - name: Upload ArmorPaint package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArmorPaint-Linux-x64
+          path: ArmorPaint-Linux-x64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
